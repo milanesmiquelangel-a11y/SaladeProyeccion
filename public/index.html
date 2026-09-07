@@ -3,93 +3,100 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta name="theme-color" content="#0b1020" />
+    <meta name="theme-color" content="#070b16" />
+    <meta name="description" content="Sala de Proyección — crea y organiza vídeos generados con IA." />
     <title>Sala de Proyección</title>
     <link rel="stylesheet" href="/styles.css" />
   </head>
   <body>
     <header class="topbar">
-      <div class="brand">
+      <a class="brand" href="#crear" aria-label="Sala de Proyección">
         <div class="brand-mark">▶</div>
-        <div>
-          <h1>Sala de Proyección</h1>
-          <span>Generador de vídeo con IA</span>
-        </div>
+        <div><h1>Sala de Proyección</h1><span>Estudio de vídeo con IA</span></div>
+      </a>
+      <div class="top-actions">
+        <nav class="nav" aria-label="Navegación principal">
+          <button class="nav-btn active" data-view="crear">Crear</button>
+          <button class="nav-btn" data-view="proyectos">Proyectos</button>
+          <button class="nav-btn" data-view="plantillas">Plantillas</button>
+          <button class="nav-btn" data-view="ajustes">Ajustes</button>
+        </nav>
+        <div id="apiBadge" class="badge">Comprobando…</div>
       </div>
-      <div id="apiBadge" class="badge">Comprobando API…</div>
     </header>
 
     <main class="container">
-      <section class="hero">
-        <div>
-          <p class="eyebrow">CREA · PREVISUALIZA · EXPORTA</p>
-          <h2>Convierte una idea en una escena de vídeo.</h2>
-          <p class="muted">Escribe lo que quieres ver. La generación se ejecutará en el servidor y la clave de IA nunca se expone al navegador.</p>
-        </div>
-      </section>
-
-      <section class="grid">
-        <form id="videoForm" class="panel">
-          <div class="panel-title">
-            <h3>Nueva producción</h3>
-            <span id="charCount">0 / 4000</span>
+      <section id="view-crear" class="view active-view">
+        <section class="hero">
+          <div>
+            <p class="eyebrow">CREA · ORGANIZA · PROYECTA</p>
+            <h2>Convierte una idea en una escena de vídeo.</h2>
+            <p class="muted">Describe la escena, guarda tu proyecto y deja preparada la producción. La clave de IA nunca se expone al navegador.</p>
           </div>
+        </section>
 
-          <label for="prompt">Descripción de la escena</label>
-          <textarea id="prompt" maxlength="4000" required placeholder="Ej.: Un taxi negro recorre una carretera de Kazajistán al atardecer, cámara cinematográfica avanzando lentamente, cielo azul y luz dorada…"></textarea>
-
-          <label for="negative">Elementos a evitar <span>(opcional)</span></label>
-          <input id="negative" type="text" placeholder="texto deformado, parpadeos, baja calidad…" />
-
-          <div class="fields">
-            <div>
-              <label for="aspect">Formato</label>
-              <select id="aspect">
-                <option value="16:9">16:9 — Horizontal</option>
-                <option value="9:16">9:16 — Vertical</option>
-                <option value="1:1">1:1 — Cuadrado</option>
-              </select>
+        <section class="grid">
+          <form id="videoForm" class="panel">
+            <div class="panel-title"><h3>Nueva producción</h3><span id="charCount">0 / 4000</span></div>
+            <label for="projectName">Nombre del proyecto</label>
+            <input id="projectName" maxlength="80" placeholder="Ej.: Taxi al atardecer" />
+            <label for="prompt">Descripción de la escena</label>
+            <textarea id="prompt" maxlength="4000" required placeholder="Ej.: Un taxi negro recorre una carretera de Kazajistán al atardecer, cámara cinematográfica avanzando lentamente, cielo azul y luz dorada…"></textarea>
+            <label for="negative">Elementos a evitar <span>(opcional)</span></label>
+            <input id="negative" type="text" placeholder="texto deformado, parpadeos, baja calidad…" />
+            <div class="fields">
+              <div><label for="aspect">Formato</label><select id="aspect"><option value="16:9">16:9 — Horizontal</option><option value="9:16">9:16 — Vertical</option><option value="1:1">1:1 — Cuadrado</option></select></div>
+              <div><label for="resolution">Calidad</label><select id="resolution"><option value="768">Estándar</option><option value="1024">Alta</option></select></div>
             </div>
-            <div>
-              <label for="resolution">Resolución</label>
-              <select id="resolution">
-                <option value="768">768</option>
-                <option value="1024">1024</option>
-              </select>
+            <div class="quick-row">
+              <button type="button" class="chip" data-template="cinematic">🎬 Cinematográfico</button>
+              <button type="button" class="chip" data-template="social">📱 Redes sociales</button>
+              <button type="button" class="chip" data-template="product">✨ Producto</button>
             </div>
-          </div>
+            <button id="generateBtn" class="primary" type="submit">Generar vídeo</button>
+            <button id="saveDraftBtn" class="secondary" type="button">Guardar proyecto</button>
+            <p class="hint">Puedes preparar y guardar proyectos aunque la API todavía no tenga clave configurada.</p>
+          </form>
 
-          <button id="generateBtn" class="primary" type="submit">Generar vídeo</button>
-          <p class="hint">La generación es asíncrona. Mantén esta página abierta mientras se procesa.</p>
-        </form>
-
-        <section class="panel result-panel">
-          <div class="panel-title">
-            <h3>Proyección</h3>
-            <span id="statusText">Sin producción activa</span>
-          </div>
-          <div id="emptyState" class="empty-state">
-            <div class="film-icon">🎬</div>
-            <strong>Tu vídeo aparecerá aquí</strong>
-            <span>Completa la descripción y pulsa “Generar vídeo”.</span>
-          </div>
-          <div id="loadingState" class="loading hidden">
-            <div class="spinner"></div>
-            <strong id="loadingTitle">Preparando generación…</strong>
-            <span id="loadingDetail">Estamos esperando al motor de vídeo.</span>
-          </div>
-          <video id="videoPlayer" class="video hidden" controls playsinline></video>
-          <a id="videoLink" class="secondary hidden" target="_blank" rel="noopener">Abrir vídeo generado</a>
-          <div id="errorBox" class="error hidden"></div>
+          <section class="panel result-panel">
+            <div class="panel-title"><h3>Proyección</h3><span id="statusText">Sin producción activa</span></div>
+            <div id="emptyState" class="empty-state"><div class="film-icon">🎬</div><strong>Tu vídeo aparecerá aquí</strong><span>Completa la descripción y pulsa “Generar vídeo”.</span></div>
+            <div id="loadingState" class="loading hidden"><div class="spinner"></div><strong id="loadingTitle">Preparando generación…</strong><span id="loadingDetail">Estamos esperando al motor de vídeo.</span></div>
+            <video id="videoPlayer" class="video hidden" controls playsinline></video>
+            <a id="videoLink" class="secondary hidden" target="_blank" rel="noopener">Abrir vídeo generado</a>
+            <div id="errorBox" class="error hidden"></div>
+          </section>
         </section>
       </section>
 
-      <section class="panel history-panel">
-        <div class="panel-title">
-          <h3>Producciones recientes</h3>
-          <button id="clearHistory" class="text-button" type="button">Limpiar</button>
+      <section id="view-proyectos" class="view hidden">
+        <div class="section-heading"><div><p class="eyebrow">BIBLIOTECA</p><h2>Mis proyectos</h2><p class="muted">Tus borradores y producciones se guardan en este navegador.</p></div><button id="newProjectBtn" class="primary compact">+ Nuevo proyecto</button></div>
+        <div id="projectsGrid" class="cards-grid"></div>
+      </section>
+
+      <section id="view-plantillas" class="view hidden">
+        <div class="section-heading"><div><p class="eyebrow">IDEAS LISTAS</p><h2>Plantillas</h2><p class="muted">Empieza con una estructura de prompt y personalízala.</p></div></div>
+        <div class="cards-grid template-grid">
+          <article class="template-card"><span>🎬</span><h3>Cinematográfico</h3><p>Sujeto + entorno + movimiento de cámara + iluminación + ambiente.</p><button class="secondary use-template" data-template="cinematic">Usar plantilla</button></article>
+          <article class="template-card"><span>📱</span><h3>Redes sociales</h3><p>Escena vertical, ritmo rápido, composición atractiva y cierre visual.</p><button class="secondary use-template" data-template="social">Usar plantilla</button></article>
+          <article class="template-card"><span>✨</span><h3>Producto</h3><p>Presentación limpia del producto con movimiento de cámara y luz de estudio.</p><button class="secondary use-template" data-template="product">Usar plantilla</button></article>
+          <article class="template-card"><span>🌄</span><h3>Viaje</h3><p>Paisaje, movimiento suave, escala, atmósfera y sensación de descubrimiento.</p><button class="secondary use-template" data-template="travel">Usar plantilla</button></article>
         </div>
-        <div id="history" class="history-empty">Todavía no hay producciones guardadas en este navegador.</div>
+      </section>
+
+      <section id="view-ajustes" class="view hidden">
+        <div class="section-heading"><div><p class="eyebrow">CONFIGURACIÓN</p><h2>Ajustes</h2><p class="muted">Preferencias de la aplicación. No contienen secretos.</p></div></div>
+        <div class="panel settings-panel">
+          <div class="setting"><div><strong>Idioma</strong><span>Idioma de la interfaz</span></div><select id="languageSetting"><option value="es">Español</option><option value="en">English</option></select></div>
+          <div class="setting"><div><strong>Autoguardado</strong><span>Guardar automáticamente los borradores</span></div><label class="switch"><input id="autosaveSetting" type="checkbox" checked /><span></span></label></div>
+          <div class="setting"><div><strong>Proveedor</strong><span id="providerSetting">Preparando conexión…</span></div><span class="status-dot" id="providerDot"></span></div>
+          <div class="setting"><div><strong>Datos locales</strong><span>Proyectos e historial guardados en este dispositivo</span></div><button id="resetLocalBtn" class="danger-button" type="button">Borrar datos</button></div>
+        </div>
+      </section>
+
+      <section class="panel history-panel">
+        <div class="panel-title"><h3>Actividad reciente</h3><button id="clearHistory" class="text-button" type="button">Limpiar historial</button></div>
+        <div id="history" class="history-empty">Todavía no hay actividad.</div>
       </section>
     </main>
 
