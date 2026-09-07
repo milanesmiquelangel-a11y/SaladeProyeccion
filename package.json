@@ -1,8 +1,8 @@
 {
   "name": "sala-de-proyeccion",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
-  "description": "Backend Node/Express para Sala de Proyección con generación de vídeo IA.",
+  "description": "Backend Node/Express para Sala de Proyección con generación y montaje de vídeo IA.",
   "type": "module",
   "main": "src/server.js",
   "scripts": {
@@ -15,6 +15,7 @@
   "dependencies": {
     "cors": "^2.8.5",
     "dotenv": "^16.4.7",
-    "express": "^4.21.2"
+    "express": "^4.21.2",
+    "ffmpeg-static": "^5.2.0"
   }
 }
