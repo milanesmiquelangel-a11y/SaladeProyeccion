@@ -1,0 +1,12 @@
+services:
+  - type: web
+    name: sala-de-proyeccion
+    runtime: node
+    buildCommand: npm install
+    startCommand: npm start
+    healthCheckPath: /api/health
+    envVars:
+      - key: VIDEO_PROVIDER
+        value: pixazo-ltx
+      - key: PIXAZO_API_KEY
+        sync: false
