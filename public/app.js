@@ -4,7 +4,9 @@ const projectNameInput = $('#projectName');
 const promptInput = $('#prompt');
 const negativeInput = $('#negative');
 const aspectInput = $('#aspect');
+const durationInput = $('#duration');
 const resolutionInput = $('#resolution');
+const frameRateInput = $('#frameRate');
 const generateBtn = $('#generateBtn');
 const saveDraftBtn = $('#saveDraftBtn');
 const charCount = $('#charCount');
@@ -38,6 +40,8 @@ const templates = {
   product: 'Presentación cinematográfica de [PRODUCTO] sobre un escenario limpio y elegante, cámara realizando un movimiento lento alrededor del producto, iluminación de estudio, reflejos realistas y acabado premium.',
   travel: 'Plano cinematográfico de [PAISAJE] durante [MOMENTO DEL DÍA], cámara avanzando suavemente, escala impresionante, luz natural, atmósfera realista y sensación de descubrimiento.'
 };
+
+const FRAME_COUNTS = { 4: 97, 5: 121, 8: 193 };
 
 let pollTimer;
 let currentRequestId = null;
@@ -89,7 +93,7 @@ function renderHistory() {
   history.className = '';
   history.innerHTML = items.map((item) => `
     <div class="history-item">
-      <div><strong>${escapeHtml(item.name || item.prompt || 'Producción')}</strong><span>${new Date(item.date).toLocaleString()} · ${escapeHtml(item.aspect || '16:9')} · ${escapeHtml(item.status || 'Guardado')}</span></div>
+      <div><strong>${escapeHtml(item.name || item.prompt || 'Producción')}</strong><span>${new Date(item.date).toLocaleString()} · ${escapeHtml(item.aspect || '16:9')} · ${escapeHtml(item.duration ? `${item.duration}s` : '')} · ${escapeHtml(item.status || 'Guardado')}</span></div>
       ${item.url ? `<a href="${escapeAttr(item.url)}" target="_blank" rel="noopener">Ver vídeo</a>` : '<span>Preparado</span>'}
     </div>
   `).join('');
@@ -105,11 +109,14 @@ function saveProject(overrides = {}) {
     prompt,
     negative: negativeInput.value.trim(),
     aspect: aspectInput.value,
+    duration: Number(durationInput.value),
     resolution: resolutionInput.value,
+    frameRate: Number(frameRateInput.value),
     updatedAt: Date.now(),
     createdAt: overrides.createdAt || Date.now(),
     status: overrides.status || 'borrador',
     url: overrides.url || '',
+    requestId: overrides.requestId || '',
   };
   const index = projects.findIndex((item) => item.id === project.id);
   if (index >= 0) projects[index] = { ...projects[index], ...project };
@@ -127,11 +134,14 @@ function renderProjects() {
   }
   projectsGrid.innerHTML = projects.map((project) => `
     <article class="project-card">
+      ${project.url ? `<video class="project-preview" src="${escapeAttr(project.url)}" muted playsinline preload="metadata"></video>` : '<div class="project-preview project-placeholder">🎬</div>'}
       <h3>${escapeHtml(project.name)}</h3>
       <p>${escapeHtml(project.prompt || 'Sin descripción')}</p>
-      <div class="project-meta"><span>${escapeHtml(project.aspect)}</span><span>${new Date(project.updatedAt).toLocaleDateString()}</span></div>
-      <button class="secondary open-project" data-id="${escapeAttr(project.id)}">Abrir proyecto</button>
-      ${project.url ? `<a class="secondary" href="${escapeAttr(project.url)}" target="_blank" rel="noopener">Ver vídeo</a>` : ''}
+      <div class="project-meta"><span>${escapeHtml(project.aspect)} · ${escapeHtml(project.duration ? `${project.duration}s` : '')}</span><span>${new Date(project.updatedAt).toLocaleDateString()}</span></div>
+      <div class="project-actions">
+        <button class="secondary open-project" data-id="${escapeAttr(project.id)}">Abrir proyecto</button>
+        ${project.url ? `<a class="secondary" href="${escapeAttr(project.url)}" target="_blank" rel="noopener">Ver vídeo</a>` : ''}
+      </div>
     </article>
   `).join('');
 }
@@ -143,8 +153,20 @@ function openProject(id) {
   promptInput.value = project.prompt || '';
   negativeInput.value = project.negative || '';
   aspectInput.value = project.aspect || '16:9';
-  resolutionInput.value = project.resolution || '768';
+  durationInput.value = String(project.duration || 5);
+  resolutionInput.value = project.resolution || 'standard';
+  frameRateInput.value = String(project.frameRate || 24);
   updateCounter();
+  if (project.url) {
+    videoPlayer.src = project.url;
+    videoPlayer.classList.remove('hidden');
+    videoLink.href = project.url;
+    videoLink.classList.remove('hidden');
+    emptyState.classList.add('hidden');
+    statusText.textContent = 'Completado';
+  } else {
+    clearResult();
+  }
   showView('crear');
   window.scrollTo({ top: 0, behavior: 'smooth' });
 }
@@ -199,8 +221,8 @@ async function pollStatus(requestId, project) {
       videoLink.classList.remove('hidden');
       loadingState.classList.add('hidden');
       statusText.textContent = 'Completado';
-      saveHistory({ name: project.name, prompt: project.prompt, aspect: project.aspect, url, date: Date.now(), status: 'completado' });
-      saveProject({ ...project, status: 'completado', url });
+      saveHistory({ name: project.name, prompt: project.prompt, aspect: project.aspect, duration: project.duration, url, date: Date.now(), status: 'completado' });
+      saveProject({ ...project, status: 'completado', url, requestId });
       currentRequestId = null;
       generateBtn.disabled = false;
       return;
@@ -223,9 +245,9 @@ form.addEventListener('submit', async (event) => {
   const prompt = promptInput.value.trim();
   if (!prompt) return;
   const project = saveProject({ status: 'pendiente' });
-  saveHistory({ name: project.name, prompt, aspect: project.aspect, date: Date.now(), status: 'solicitud enviada' });
+  saveHistory({ name: project.name, prompt, aspect: project.aspect, duration: project.duration, date: Date.now(), status: 'solicitud enviada' });
   generateBtn.disabled = true;
-  setLoading('Enviando solicitud…', 'Contactando con el motor de generación.');
+  setLoading('Enviando solicitud…', 'Contactando con LTX 2.5 Free.');
   try {
     const response = await fetch('/api/video/generate', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -233,6 +255,9 @@ form.addEventListener('submit', async (event) => {
         prompt,
         negative: negativeInput.value.trim(),
         aspect: aspectInput.value,
+        duration: Number(durationInput.value),
+        resolution: resolutionInput.value,
+        frameRate: Number(frameRateInput.value),
       }),
     });
     const data = await response.json();
@@ -250,12 +275,14 @@ form.addEventListener('submit', async (event) => {
 
 saveDraftBtn.addEventListener('click', () => {
   const project = saveProject({ status: 'borrador' });
-  saveHistory({ name: project.name, prompt: project.prompt, aspect: project.aspect, date: Date.now(), status: 'borrador guardado' });
+  saveHistory({ name: project.name, prompt: project.prompt, aspect: project.aspect, duration: project.duration, date: Date.now(), status: 'borrador guardado' });
   saveDraftBtn.textContent = '✓ Proyecto guardado';
   setTimeout(() => { saveDraftBtn.textContent = 'Guardar proyecto'; }, 1600);
 });
 
 promptInput.addEventListener('input', () => { updateCounter(); if (autosaveSetting.checked) saveProject({ status: 'borrador' }); });
+negativeInput.addEventListener('input', () => { if (autosaveSetting.checked) saveProject({ status: 'borrador' }); });
+[aspectInput, durationInput, resolutionInput, frameRateInput, projectNameInput].forEach((input) => input.addEventListener('change', () => { if (autosaveSetting.checked) saveProject({ status: 'borrador' }); }));
 
 clearHistory.addEventListener('click', () => { localStorage.removeItem(STORAGE.history); renderHistory(); });
 
@@ -267,7 +294,7 @@ projectsGrid.addEventListener('click', (event) => {
   if (button) openProject(button.dataset.id);
 });
 
-$('#newProjectBtn').addEventListener('click', () => { form.reset(); updateCounter(); clearResult(); showView('crear'); promptInput.focus(); });
+$('#newProjectBtn').addEventListener('click', () => { form.reset(); durationInput.value = '5'; resolutionInput.value = 'standard'; frameRateInput.value = '24'; updateCounter(); clearResult(); showView('crear'); promptInput.focus(); });
 
 languageSetting.addEventListener('change', () => {
   const settings = readJson(STORAGE.settings, {}); settings.language = languageSetting.value; writeJson(STORAGE.settings, settings);
