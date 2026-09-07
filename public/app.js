@@ -32,6 +32,7 @@ const STORAGE = { projects: 'salaProjects', history: 'salaHistory', settings: 's
 const templates = {
   cinematic: 'Una escena cinematográfica de [SUJETO] en [LUGAR], movimiento de cámara suave y realista, iluminación dramática, profundidad de campo, composición profesional, ambiente natural y acabado de película.',
   social: 'Vídeo vertical dinámico de [SUJETO] en [LUGAR], composición pensada para redes sociales, movimiento de cámara atractivo, iluminación vibrante, ritmo visual rápido y final impactante.',
+  taxidrive: `Create a photorealistic 30-second vertical promotional Reel for TaxiDrive.kz in Kazakhstan. Use the same modern black Haval M6 taxi throughout the entire story. The commercial tells a simple transportation journey: first show the taxi traveling through the Kazakh steppe, then show a passenger safely using a smartphone while the car is stopped, then show the taxi arriving for pickup, then show a correctly composed interior with ONE driver alone in the driver's seat behind the steering wheel and ONE passenger alone in the opposite front passenger seat, with clearly separated bodies and seats, and finish with a premium exterior hero shot of the same black Haval M6. Keep people anatomically correct and consistent. Never put two people in one seat. Never put the passenger behind the steering wheel. Never merge or overlap bodies. Never show the passenger using a phone while the vehicle is moving. Use cinematic golden-hour lighting, realistic Kazakhstan landscapes, smooth professional commercial camera movement, premium automotive advertising cinematography, natural motion, realistic reflections and strong visual continuity between scenes. Do not attempt complex readable smartphone text; show only a clean generic taxi-app interface.`,
   product: 'Presentación cinematográfica de [PRODUCTO] sobre un escenario limpio y elegante, cámara realizando un movimiento lento alrededor del producto, iluminación de estudio, reflejos realistas y acabado premium.',
   travel: 'Plano cinematográfico de [PAISAJE] durante [MOMENTO DEL DÍA], cámara avanzando suavemente, escala impresionante, luz natural, atmósfera realista y sensación de descubrimiento.'
 };
@@ -150,7 +151,7 @@ function showView(name) {
 function applyTemplate(name) {
   if (!templates[name]) return;
   promptInput.value = templates[name];
-  if (name === 'social') { aspectInput.value = '9:16'; durationInput.value = '30'; }
+  if (name === 'social' || name === 'taxidrive') { aspectInput.value = '9:16'; durationInput.value = '30'; }
   updateCounter(); showView('crear'); promptInput.focus();
 }
 
@@ -262,7 +263,7 @@ $('#newProjectBtn').addEventListener('click', () => { form.reset(); durationInpu
 languageSetting.addEventListener('change', () => { const settings = readJson(STORAGE.settings, {}); settings.language = languageSetting.value; writeJson(STORAGE.settings, settings); });
 autosaveSetting.addEventListener('change', () => { const settings = readJson(STORAGE.settings, {}); settings.autosave = autosaveSetting.checked; writeJson(STORAGE.settings, settings); });
 resetLocalBtn.addEventListener('click', () => { if (!confirm('¿Borrar proyectos, historial y preferencias locales?')) return; Object.values(STORAGE).forEach((key) => localStorage.removeItem(key)); renderProjects(); renderHistory(); autosaveSetting.checked = true; languageSetting.value = 'es'; });
-function escapeHtml(value) { return String(value).replace(/[&<>'"]/g, (char) => ({ '&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;' }[char])); }
+function escapeHtml(value) { return String(value).replace(/[&<>'\"]/g, (char) => ({ '&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;' }[char])); }
 function escapeAttr(value) { return escapeHtml(value); }
 const settings = readJson(STORAGE.settings, { language: 'es', autosave: true });
 languageSetting.value = settings.language || 'es'; autosaveSetting.checked = settings.autosave !== false;
