@@ -7,6 +7,7 @@ import fs from 'node:fs/promises';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
+import { randomUUID } from 'node:crypto';
 import ffmpegPath from 'ffmpeg-static';
 
 const execFileAsync = promisify(execFile);
@@ -107,19 +108,21 @@ async function assembleClips(clipPaths, outputPath) {
 
 function sceneDirection(index, total) {
   const directions = [
-    'OPENING EXTERIOR. Establish the location and the main vehicle from outside. No people inside the car are visible. Use a wide cinematic tracking shot.',
-    'VEHICLE ACTION EXTERIOR. Show the same vehicle driving normally on the road. Camera remains outside the vehicle. Do not show passengers or driver.',
-    'PHONE DETAIL, STATIONARY. Show a passenger safely stopped and seated separately from the driver, looking at a smartphone. The vehicle is parked or stationary. Do not show anyone driving while using the phone.',
-    'PASSENGER PICKUP. Show one driver in the driver seat and one passenger in the front passenger seat, each in their own clearly separated seat. Driver is on the steering-wheel side and passenger is on the opposite front seat. Never place two people in one seat. Both bodies must be anatomically separate and correctly positioned.',
-    'ARRIVAL EXTERIOR. Show the vehicle arriving or stopping for the passenger from an exterior camera. Avoid complex interior interaction. Keep the same vehicle model, color and environment.',
-    'HERO CLOSING. Premium exterior hero shot of the same vehicle moving through the landscape. No interior people. Leave clean visual space for a possible promotional title.'
+    'SCENE 1 — ESTABLISHING ROAD. Exterior only. A black Haval M6 compact SUV is completely on a paved two-lane road in the Kazakhstan steppe. The road must be clearly visible under all four wheels. The vehicle travels forward in the same direction as the road, centered in its lane. Camera tracks from the front three-quarter angle. No dirt driving, no grass driving, no off-road movement, no people visible.',
+    'SCENE 2 — NORMAL DRIVING. Exterior tracking shot only. The exact same black Haval M6 travels FORWARD on a clearly paved road. Four wheels remain firmly on the asphalt and aligned with the road. The vehicle body stays physically coherent and rigid. Camera moves parallel to the road; do not rotate the vehicle sideways. No jumps, drifting, floating, reversing, teleporting or off-road driving. No interior view and no people.',
+    'SCENE 3 — APP PHONE DETAIL. The car is PARKED SAFELY on the shoulder beside the paved road, fully stationary. Close-up of one passenger holding a generic smartphone with a simple blue taxi-app interface. The phone is the visual focus. The person is seated normally in the front passenger seat, not driving. Steering wheel is not visible. No readable text, no distorted fingers, no moving vehicle.',
+    'SCENE 4 — ARRIVAL. Exterior only. The same black Haval M6 approaches and stops normally on the paved road beside a safe roadside pickup point. The vehicle remains parallel to the road with all four wheels on asphalt. Show one passenger standing outside the vehicle near the pickup point, waiting safely. Do not show people inside the cabin. No off-road driving, no sideways vehicle, no deformed car.',
+    'SCENE 5 — SIMPLE PASSENGER MOMENT. Static exterior shot at the stopped car. One passenger enters the front passenger side naturally; keep the body fully visible and anatomically correct. The driver is NOT visible in this shot. Do not show two people in one seat. Avoid complex interior anatomy and avoid showing the steering wheel.',
+    'SCENE 6 — HERO CLOSING. Exterior automotive commercial hero shot. The same black Haval M6 drives FORWARD on a clearly visible paved two-lane road through the Kazakhstan steppe. All four wheels stay on the asphalt, vehicle remains aligned with the road, realistic suspension and natural motion. Camera follows smoothly from a rear three-quarter or front three-quarter angle. No people, no interior, no off-road movement, no deformations.'
   ];
   return `Scene ${index + 1} of ${total}. ${directions[index % directions.length]}`;
 }
 
 function continuityRules() {
-  return `CONTINUITY AND SAFETY RULES: Keep the exact same vehicle, vehicle color, environment, time of day and visual style across scenes. Photorealistic anatomy. If people appear, every person must have one body, one head, two arms and two legs, with anatomically correct proportions. A driver and passenger must NEVER share the same seat or overlap bodies. The driver sits alone in the driver's seat directly behind the steering wheel. The passenger sits alone in the opposite front passenger seat. Never merge, duplicate, cross, or swap people. Never show a person sitting on top of another person. Never place a passenger behind the steering wheel. Do not create a phone interaction while the vehicle is moving. Avoid text inside generated smartphone screens because text may be distorted.`;
+  return `MASTER CONTINUITY RULES: This is a professional automotive commercial. Preserve the same black Haval M6 compact SUV throughout. The vehicle must have one coherent rigid body, four normal wheels, four wheel arches, two headlights and physically correct proportions. NEVER deform, duplicate, melt, stretch, bend, mirror or morph the vehicle. Whenever the vehicle moves, it MUST be completely on a clearly visible paved road; every wheel touches asphalt and the vehicle is aligned with the road direction. NEVER drive across grass, fields, dirt, sand or diagonally sideways. NEVER make the car float, slide sideways, travel backwards while facing forward, jump, teleport or change shape. Use realistic tire rotation, suspension, shadows and road contact. Keep Kazakhstan steppe, golden-hour light and premium photorealistic automotive cinematography consistent. Prefer simple shots with one clear action. Avoid complex multi-person interior scenes because anatomy and seat placement must remain realistic. If a person appears, use one person at a time unless the scene explicitly requires otherwise; never merge bodies, duplicate limbs or place two people in one seat. No readable generated text on phones, signs or license plates.`;
 }
+
+const safetyNegative = 'deformed car, malformed vehicle, warped vehicle, melted car, duplicated car, extra wheels, missing wheels, extra tires, broken axle, floating car, sideways driving, diagonal driving, drifting, car off road, car on grass, car in field, car on dirt, car in sand, wheels off asphalt, wheels floating, vehicle crossing road sideways, impossible steering, impossible perspective, distorted road, broken road, duplicate people, merged people, fused bodies, extra arms, extra legs, extra heads, passenger driving, two people in one seat, person behind steering wheel when not driver, distorted hands, unreadable text, warped smartphone, cartoon, CGI look';
 
 async function runSequence(jobId, body) {
   const totalSeconds = Number(body.duration);
@@ -131,8 +134,9 @@ async function runSequence(jobId, body) {
   try {
     for (let index = 0; index < clipCount; index += 1) {
       job.status = 'PROCESSING'; job.currentScene = index + 1; job.totalScenes = clipCount; job.detail = `Generando escena ${index + 1} de ${clipCount}…`;
-      const scenePrompt = `${body.prompt.trim()}\n\n${sceneDirection(index, clipCount)}\n${continuityRules()}\nVisual style: photorealistic cinematic commercial, natural lighting, realistic motion, professional advertising cinematography.`;
-      const requestId = await submitPixazo(scenePrompt, body.negative, settings);
+      const scenePrompt = `${body.prompt.trim()}\n\n${sceneDirection(index, clipCount)}\n${continuityRules()}\nVisual style: photorealistic cinematic commercial, realistic physics, natural motion, professional automotive advertising, physically correct road contact, clean composition.`;
+      const combinedNegative = [body.negative?.trim(), safetyNegative].filter(Boolean).join(', ');
+      const requestId = await submitPixazo(scenePrompt, combinedNegative, settings);
       job.providerRequestId = requestId;
       const mediaUrl = await waitForPixazo(requestId, (state) => { job.providerState = state; job.detail = `Escena ${index + 1} de ${clipCount}: ${state || 'procesando'}…`; });
       const clipPath = path.join(jobDir, `scene-${String(index + 1).padStart(2, '0')}.mp4`);
@@ -173,7 +177,7 @@ app.post('/api/video/sequence', async (req, res) => {
   if (typeof prompt !== 'string' || prompt.trim().length === 0) return res.status(400).json({ error: 'prompt es obligatorio.' });
   if (prompt.trim().length > 4000) return res.status(400).json({ error: 'prompt no puede superar 4000 caracteres.' });
   if (!allowedDurations.has(selectedDuration)) return res.status(400).json({ error: 'La duración promocional debe ser 10, 15, 30 o 60 segundos.' });
-  const jobId = crypto.randomUUID();
+  const jobId = randomUUID();
   sequenceJobs.set(jobId, { id: jobId, status: 'QUEUED', currentScene: 0, totalScenes: Math.ceil(selectedDuration / 5), providerState: 'QUEUED', detail: 'Producción en cola…', outputUrl: '' });
   runSequence(jobId, { prompt: prompt.trim(), negative, aspect, duration: selectedDuration, resolution, frameRate }).catch((error) => { const job = sequenceJobs.get(jobId); if (job) { job.status = 'ERROR'; job.detail = error.message || 'Error inesperado.'; } });
   return res.status(202).json({ job_id: jobId, duration: selectedDuration, scenes: Math.ceil(selectedDuration / 5) });
