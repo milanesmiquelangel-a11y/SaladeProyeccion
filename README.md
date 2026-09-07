@@ -82,3 +82,9 @@ Body mínimo:
 ## Despliegue
 
 El repositorio incluye `Dockerfile` y `render.yaml` para facilitar un despliegue como servicio web Node. La API key debe configurarse como secreto en el proveedor de hosting, no dentro del repositorio.
+
+## Verificación de despliegue
+
+Esta versión del repositorio se mantiene en la rama `main`. Si un servicio de hosting muestra una interfaz antigua (por ejemplo, la antigua pantalla de Wan2.2/Hugging Face), debe comprobarse que el servicio está conectado a este repositorio y a `main`, y que el despliegue utiliza el commit más reciente.
+
+<!-- deployment-verification: 2026-09-07 -->
