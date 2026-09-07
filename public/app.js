@@ -202,6 +202,7 @@ async function pollStatus(requestId, project) {
       saveHistory({ name: project.name, prompt: project.prompt, aspect: project.aspect, url, date: Date.now(), status: 'completado' });
       saveProject({ ...project, status: 'completado', url });
       currentRequestId = null;
+      generateBtn.disabled = false;
       return;
     }
     if (['ERROR','FAILED','CANCELLED'].includes(state)) throw new Error(data.error || `La generación terminó con estado ${state}.`);
@@ -228,7 +229,11 @@ form.addEventListener('submit', async (event) => {
   try {
     const response = await fetch('/api/video/generate', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ prompt }),
+      body: JSON.stringify({
+        prompt,
+        negative: negativeInput.value.trim(),
+        aspect: aspectInput.value,
+      }),
     });
     const data = await response.json();
     if (!response.ok) throw new Error(data.error || 'No se pudo iniciar la generación.');
