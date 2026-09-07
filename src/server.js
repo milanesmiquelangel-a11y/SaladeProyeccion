@@ -7,8 +7,8 @@ import { fileURLToPath } from 'node:url';
 const app = express();
 const PORT = Number(process.env.PORT || 3000);
 const PIXAZO_API_KEY = process.env.PIXAZO_API_KEY;
-const PIXAZO_VIDEO_URL = 'https://gateway.pixazo.ai/ltx-video/v1/text-to-video';
-const PIXAZO_STATUS_URL = 'https://gateway.pixazo.ai/v2/requests/status';
+const PIXAZO_VIDEO_URL = process.env.PIXAZO_VIDEO_URL || 'https://gateway.pixazo.ai/ltx/text-to-video';
+const PIXAZO_STATUS_URL = process.env.PIXAZO_STATUS_URL || 'https://gateway.pixazo.ai/v2/requests/status';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const publicDir = path.join(__dirname, '..', 'public');
 
@@ -20,6 +20,8 @@ app.get('/api/health', (_req, res) => {
   res.json({
     ok: true,
     service: 'sala-de-proyeccion-api',
+    provider: 'Pixazo LTX',
+    generationReady: Boolean(PIXAZO_API_KEY),
     pixazoConfigured: Boolean(PIXAZO_API_KEY),
   });
 });
@@ -31,37 +33,17 @@ app.post('/api/video/generate', async (req, res) => {
     });
   }
 
-  const {
-    prompt,
-    negative,
-    aspect,
-    width,
-    height,
-    num_frames,
-    frame_rate,
-    steps,
-    cfg,
-    seed,
-  } = req.body ?? {};
+  const { prompt } = req.body ?? {};
 
   if (typeof prompt !== 'string' || prompt.trim().length === 0) {
     return res.status(400).json({ error: 'prompt es obligatorio.' });
   }
 
-  if (prompt.length > 4000) {
+  if (prompt.trim().length > 4000) {
     return res.status(400).json({ error: 'prompt no puede superar 4000 caracteres.' });
   }
 
   const payload = { prompt: prompt.trim() };
-  if (typeof negative === 'string' && negative.trim()) payload.negative = negative.trim();
-  if (typeof aspect === 'string') payload.aspect = aspect;
-  if (Number.isInteger(width)) payload.width = width;
-  if (Number.isInteger(height)) payload.height = height;
-  if (Number.isInteger(num_frames)) payload.num_frames = num_frames;
-  if (typeof frame_rate === 'number') payload.frame_rate = frame_rate;
-  if (Number.isInteger(steps)) payload.steps = steps;
-  if (typeof cfg === 'number') payload.cfg = cfg;
-  if (Number.isInteger(seed)) payload.seed = seed;
 
   try {
     const response = await fetch(PIXAZO_VIDEO_URL, {
@@ -82,7 +64,7 @@ app.post('/api/video/generate', async (req, res) => {
       });
     }
 
-    return res.status(202).json(data);
+    return res.status(response.status === 200 ? 200 : 202).json(data);
   } catch (error) {
     console.error('Pixazo generation error:', error);
     return res.status(502).json({
