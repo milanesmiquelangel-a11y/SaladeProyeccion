@@ -31,7 +31,7 @@
           <div>
             <p class="eyebrow">CREA · ORGANIZA · PROYECTA</p>
             <h2>Convierte una idea en una escena de vídeo.</h2>
-            <p class="muted">Describe la escena, guarda tu proyecto y deja preparada la producción. La clave de IA nunca se expone al navegador.</p>
+            <p class="muted">Describe la escena, controla duración y formato, guarda tu proyecto y deja preparada la producción. La clave de IA nunca se expone al navegador.</p>
           </div>
         </section>
 
@@ -43,10 +43,14 @@
             <label for="prompt">Descripción de la escena</label>
             <textarea id="prompt" maxlength="4000" required placeholder="Ej.: Un taxi negro recorre una carretera de Kazajistán al atardecer, cámara cinematográfica avanzando lentamente, cielo azul y luz dorada…"></textarea>
             <label for="negative">Elementos a evitar <span>(opcional)</span></label>
-            <input id="negative" type="text" placeholder="texto deformado, parpadeos, baja calidad…" />
+            <input id="negative" type="text" maxlength="4000" placeholder="texto deformado, parpadeos, baja calidad…" />
             <div class="fields">
               <div><label for="aspect">Formato</label><select id="aspect"><option value="16:9">16:9 — Horizontal</option><option value="9:16">9:16 — Vertical</option><option value="1:1">1:1 — Cuadrado</option></select></div>
-              <div><label for="resolution">Calidad</label><select id="resolution"><option value="768">Estándar</option><option value="1024">Alta</option></select></div>
+              <div><label for="duration">Duración</label><select id="duration"><option value="4">4 segundos</option><option value="5" selected>5 segundos</option><option value="8">8 segundos</option></select></div>
+            </div>
+            <div class="fields">
+              <div><label for="resolution">Calidad</label><select id="resolution"><option value="standard" selected>Estándar</option><option value="high">Alta</option></select></div>
+              <div><label for="frameRate">FPS</label><select id="frameRate"><option value="24" selected>24 fps — Cinemático</option><option value="30">30 fps — Fluido</option></select></div>
             </div>
             <div class="quick-row">
               <button type="button" class="chip" data-template="cinematic">🎬 Cinematográfico</button>
@@ -55,7 +59,7 @@
             </div>
             <button id="generateBtn" class="primary" type="submit">Generar vídeo</button>
             <button id="saveDraftBtn" class="secondary" type="button">Guardar proyecto</button>
-            <p class="hint">Puedes preparar y guardar proyectos aunque la API todavía no tenga clave configurada.</p>
+            <p class="hint">La generación usa LTX 2.5 Free de Pixazo. El límite gratuito está sujeto a fair use del proveedor.</p>
           </form>
 
           <section class="panel result-panel">
@@ -70,7 +74,7 @@
       </section>
 
       <section id="view-proyectos" class="view hidden">
-        <div class="section-heading"><div><p class="eyebrow">BIBLIOTECA</p><h2>Mis proyectos</h2><p class="muted">Tus borradores y producciones se guardan en este navegador.</p></div><button id="newProjectBtn" class="primary compact">+ Nuevo proyecto</button></div>
+        <div class="section-heading"><div><p class="eyebrow">BIBLIOTECA</p><h2>Mis proyectos</h2><p class="muted">Tus borradores y vídeos generados se guardan en este navegador.</p></div><button id="newProjectBtn" class="primary compact">+ Nuevo proyecto</button></div>
         <div id="projectsGrid" class="cards-grid"></div>
       </section>
 
