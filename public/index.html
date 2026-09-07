@@ -31,7 +31,7 @@
           <div>
             <p class="eyebrow">CREA · ORGANIZA · PROYECTA</p>
             <h2>Convierte una idea en una escena de vídeo.</h2>
-            <p class="muted">Describe la escena, controla duración, formato y calidad, guarda tu proyecto y deja preparada la producción. La clave de IA nunca se expone al navegador.</p>
+            <p class="muted">Ahora puedes crear desde un clip corto hasta un vídeo promocional de 60 segundos. Los vídeos largos se generan por escenas y se unen automáticamente.</p>
           </div>
         </section>
 
@@ -39,14 +39,14 @@
           <form id="videoForm" class="panel">
             <div class="panel-title"><h3>Nueva producción</h3><span id="charCount">0 / 4000</span></div>
             <label for="projectName">Nombre del proyecto</label>
-            <input id="projectName" maxlength="80" placeholder="Ej.: Taxi al atardecer" />
-            <label for="prompt">Descripción de la escena</label>
-            <textarea id="prompt" maxlength="4000" required placeholder="Ej.: Un taxi negro recorre una carretera de Kazajistán al atardecer, cámara cinematográfica avanzando lentamente, cielo azul y luz dorada…"></textarea>
+            <input id="projectName" maxlength="80" placeholder="Ej.: TaxiDrive — Reel promocional" />
+            <label for="prompt">Descripción de la escena o campaña</label>
+            <textarea id="prompt" maxlength="4000" required placeholder="Ej.: Un taxi negro recorre una carretera de Kazajistán al atardecer… Para vídeos largos, describe también la idea general de toda la campaña."></textarea>
             <label for="negative">Elementos a evitar <span>(opcional)</span></label>
             <input id="negative" type="text" maxlength="4000" placeholder="texto deformado, parpadeos, baja calidad…" />
             <div class="fields">
               <div><label for="aspect">Formato</label><select id="aspect"><option value="16:9">16:9 — Horizontal</option><option value="9:16">9:16 — Vertical</option><option value="1:1">1:1 — Cuadrado</option></select></div>
-              <div><label for="duration">Duración</label><select id="duration"><option value="4">4 segundos</option><option value="5" selected>5 segundos</option></select></div>
+              <div><label for="duration">Duración total</label><select id="duration"><option value="5" selected>5 segundos — Clip</option><option value="10">10 segundos — 2 escenas</option><option value="15">15 segundos — 3 escenas</option><option value="30">30 segundos — 6 escenas</option><option value="60">60 segundos — 12 escenas</option></select></div>
             </div>
             <div class="fields">
               <div><label for="resolution">Calidad</label><select id="resolution"><option value="standard" selected>Estándar</option><option value="high">Alta</option></select></div>
@@ -59,7 +59,7 @@
             </div>
             <button id="generateBtn" class="primary" type="submit">Generar vídeo</button>
             <button id="saveDraftBtn" class="secondary" type="button">Guardar proyecto</button>
-            <p class="hint">LTX 2.5 Free admite clips cortos. El nivel gratuito está sujeto a fair use y puede reducir automáticamente la duración si se supera el límite de cómputo.</p>
+            <p class="hint">Los clips de más de 5 segundos se producen como varias escenas de 5 s y Sala de Proyección las une automáticamente. El nivel gratuito de LTX está sujeto a fair use y puede variar en tiempos y duración real.</p>
           </form>
 
           <section class="panel result-panel">
