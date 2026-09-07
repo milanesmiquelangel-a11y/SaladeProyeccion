@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 const app = express();
 const PORT = Number(process.env.PORT || 3000);
 const PIXAZO_API_KEY = process.env.PIXAZO_API_KEY;
-const PIXAZO_VIDEO_URL = process.env.PIXAZO_VIDEO_URL || 'https://gateway.pixazo.ai/ltx/text-to-video';
+const PIXAZO_VIDEO_URL = process.env.PIXAZO_VIDEO_URL || 'https://gateway.pixazo.ai/ltx-video/v1/text-to-video';
 const PIXAZO_STATUS_URL = process.env.PIXAZO_STATUS_URL || 'https://gateway.pixazo.ai/v2/requests/status';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const publicDir = path.join(__dirname, '..', 'public');
@@ -20,7 +20,7 @@ app.get('/api/health', (_req, res) => {
   res.json({
     ok: true,
     service: 'sala-de-proyeccion-api',
-    provider: 'Pixazo LTX',
+    provider: 'Pixazo LTX 2.5 Free',
     generationReady: Boolean(PIXAZO_API_KEY),
     pixazoConfigured: Boolean(PIXAZO_API_KEY),
   });
@@ -33,7 +33,7 @@ app.post('/api/video/generate', async (req, res) => {
     });
   }
 
-  const { prompt } = req.body ?? {};
+  const { prompt, negative, aspect } = req.body ?? {};
 
   if (typeof prompt !== 'string' || prompt.trim().length === 0) {
     return res.status(400).json({ error: 'prompt es obligatorio.' });
@@ -43,7 +43,16 @@ app.post('/api/video/generate', async (req, res) => {
     return res.status(400).json({ error: 'prompt no puede superar 4000 caracteres.' });
   }
 
+  const allowedAspects = new Set(['16:9', '9:16', '1:1', '21:9', '4:3', '3:4', '3:2', '2:3', '4:5']);
   const payload = { prompt: prompt.trim() };
+
+  if (typeof negative === 'string' && negative.trim()) {
+    payload.negative = negative.trim().slice(0, 4000);
+  }
+
+  if (typeof aspect === 'string' && allowedAspects.has(aspect)) {
+    payload.aspect = aspect;
+  }
 
   try {
     const response = await fetch(PIXAZO_VIDEO_URL, {
@@ -58,8 +67,11 @@ app.post('/api/video/generate', async (req, res) => {
     const data = await response.json().catch(() => ({}));
 
     if (!response.ok) {
+      const providerMessage = data?.message || data?.error || data?.detail;
       return res.status(response.status).json({
-        error: 'Pixazo rechazó la solicitud.',
+        error: providerMessage
+          ? `Pixazo rechazó la solicitud: ${providerMessage}`
+          : `Pixazo rechazó la solicitud (HTTP ${response.status}).`,
         details: data,
       });
     }
@@ -92,8 +104,11 @@ app.get('/api/video/status/:requestId', async (req, res) => {
     const data = await response.json().catch(() => ({}));
 
     if (!response.ok) {
+      const providerMessage = data?.message || data?.error || data?.detail;
       return res.status(response.status).json({
-        error: 'Pixazo no pudo consultar el trabajo.',
+        error: providerMessage
+          ? `Pixazo no pudo consultar el trabajo: ${providerMessage}`
+          : `Pixazo no pudo consultar el trabajo (HTTP ${response.status}).`,
         details: data,
       });
     }
