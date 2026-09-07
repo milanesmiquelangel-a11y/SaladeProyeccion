@@ -234,7 +234,7 @@ form.addEventListener('submit', async (event) => {
     setLoading('Enviando solicitud…', 'Contactando con LTX 2.5 Free.');
     const response = await fetch('/api/video/generate', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: { prompt, negative: negativeInput.value.trim(), aspect: aspectInput.value, duration: totalDuration, resolution: resolutionInput.value, frameRate: Number(frameRateInput.value) }
+      body: JSON.stringify({ prompt, negative: negativeInput.value.trim(), aspect: aspectInput.value, duration: totalDuration, resolution: resolutionInput.value, frameRate: Number(frameRateInput.value) })
     });
     const data = await response.json();
     if (!response.ok) throw new Error(data.error || 'No se pudo iniciar la generación.');
@@ -251,7 +251,6 @@ saveDraftBtn.addEventListener('click', () => {
   saveHistory({ name: project.name, prompt: project.prompt, aspect: project.aspect, duration: project.duration, date: Date.now(), status: 'borrador guardado' });
   saveDraftBtn.textContent = '✓ Proyecto guardado'; setTimeout(() => { saveDraftBtn.textContent = 'Guardar proyecto'; }, 1600);
 });
-
 promptInput.addEventListener('input', () => { updateCounter(); if (autosaveSetting.checked) saveProject({ status: 'borrador' }); });
 negativeInput.addEventListener('input', () => { if (autosaveSetting.checked) saveProject({ status: 'borrador' }); });
 [aspectInput, durationInput, resolutionInput, frameRateInput, projectNameInput].forEach((input) => input.addEventListener('change', () => { if (autosaveSetting.checked) saveProject({ status: 'borrador' }); }));
