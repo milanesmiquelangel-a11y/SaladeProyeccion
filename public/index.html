@@ -59,8 +59,9 @@
               <button type="button" class="chip" data-template="product">✨ Producto</button>
             </div>
             <button id="generateBtn" class="primary" type="submit">Generar vídeo</button>
+            <button id="cancelBtn" class="danger-button" type="button" disabled>⏹ Detener generación</button>
             <button id="saveDraftBtn" class="secondary" type="button">Guardar proyecto</button>
-            <p class="hint">Los clips de más de 5 segundos se producen como varias escenas de 5 s y Sala de Proyección las une automáticamente. Las escenas usan instrucciones de continuidad para reducir errores de anatomía, posiciones y vehículos.</p>
+            <p class="hint">Los clips de más de 5 segundos se producen como varias escenas de 5 s y Sala de Proyección las une automáticamente. Puedes detener una producción activa y volver a lanzar cualquier trabajo desde Actividad reciente.</p>
           </form>
 
           <section class="panel result-panel">
@@ -108,5 +109,6 @@
 
     <footer>© 2026 Sala de Proyección · La API key permanece en el servidor.</footer>
     <script src="/app.js" defer></script>
+    <script src="/history-enhancements.js" defer></script>
   </body>
 </html>
