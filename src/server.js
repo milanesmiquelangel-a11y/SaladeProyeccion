@@ -106,8 +106,19 @@ async function assembleClips(clipPaths, outputPath) {
 }
 
 function sceneDirection(index, total) {
-  const directions = ['Opening establishing shot: introduce the location and subject with a cinematic wide view.','Action shot: show the main subject clearly performing the central action with smooth camera movement.','Detail shot: move closer to an important detail, keeping the subject visually consistent.','Interaction shot: show the subject interacting naturally with the environment or product.','Dynamic transition shot: use a smooth tracking or side camera movement to build energy.','Hero shot: present the subject in its strongest, most memorable cinematic composition.','Benefit shot: visually communicate the main value or experience of the story.','Closing shot: finish with a clean premium composition suitable for a promotional ending.'];
+  const directions = [
+    'OPENING EXTERIOR. Establish the location and the main vehicle from outside. No people inside the car are visible. Use a wide cinematic tracking shot.',
+    'VEHICLE ACTION EXTERIOR. Show the same vehicle driving normally on the road. Camera remains outside the vehicle. Do not show passengers or driver.',
+    'PHONE DETAIL, STATIONARY. Show a passenger safely stopped and seated separately from the driver, looking at a smartphone. The vehicle is parked or stationary. Do not show anyone driving while using the phone.',
+    'PASSENGER PICKUP. Show one driver in the driver seat and one passenger in the front passenger seat, each in their own clearly separated seat. Driver is on the steering-wheel side and passenger is on the opposite front seat. Never place two people in one seat. Both bodies must be anatomically separate and correctly positioned.',
+    'ARRIVAL EXTERIOR. Show the vehicle arriving or stopping for the passenger from an exterior camera. Avoid complex interior interaction. Keep the same vehicle model, color and environment.',
+    'HERO CLOSING. Premium exterior hero shot of the same vehicle moving through the landscape. No interior people. Leave clean visual space for a possible promotional title.'
+  ];
   return `Scene ${index + 1} of ${total}. ${directions[index % directions.length]}`;
+}
+
+function continuityRules() {
+  return `CONTINUITY AND SAFETY RULES: Keep the exact same vehicle, vehicle color, environment, time of day and visual style across scenes. Photorealistic anatomy. If people appear, every person must have one body, one head, two arms and two legs, with anatomically correct proportions. A driver and passenger must NEVER share the same seat or overlap bodies. The driver sits alone in the driver's seat directly behind the steering wheel. The passenger sits alone in the opposite front passenger seat. Never merge, duplicate, cross, or swap people. Never show a person sitting on top of another person. Never place a passenger behind the steering wheel. Do not create a phone interaction while the vehicle is moving. Avoid text inside generated smartphone screens because text may be distorted.`;
 }
 
 async function runSequence(jobId, body) {
@@ -120,7 +131,7 @@ async function runSequence(jobId, body) {
   try {
     for (let index = 0; index < clipCount; index += 1) {
       job.status = 'PROCESSING'; job.currentScene = index + 1; job.totalScenes = clipCount; job.detail = `Generando escena ${index + 1} de ${clipCount}…`;
-      const scenePrompt = `${body.prompt.trim()}\n\n${sceneDirection(index, clipCount)}\nMaintain the same subject, setting, visual style, colors and continuity across all scenes. Photorealistic cinematic advertising quality.`;
+      const scenePrompt = `${body.prompt.trim()}\n\n${sceneDirection(index, clipCount)}\n${continuityRules()}\nVisual style: photorealistic cinematic commercial, natural lighting, realistic motion, professional advertising cinematography.`;
       const requestId = await submitPixazo(scenePrompt, body.negative, settings);
       job.providerRequestId = requestId;
       const mediaUrl = await waitForPixazo(requestId, (state) => { job.providerState = state; job.detail = `Escena ${index + 1} de ${clipCount}: ${state || 'procesando'}…`; });
