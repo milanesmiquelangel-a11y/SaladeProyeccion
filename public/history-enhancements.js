@@ -17,6 +17,7 @@
   const loadingTitle = $('#loadingTitle');
   const loadingDetail = $('#loadingDetail');
   const newProjectBtn = $('#newProjectBtn');
+  const videoForm = $('#videoForm');
 
   function currentJob() {
     const projects = readJson(STORAGE.projects, []);
@@ -35,10 +36,11 @@
     document.querySelectorAll('.nav-btn').forEach((button) => button.classList.toggle('active', button.dataset.view === name));
   }
 
-  // Clear only the visible editor. Do NOT dispatch an input event here:
-  // app.js uses input events for autosave, which could recreate an empty draft.
+  // Clear only the visible editor. Never fire input/change events here because
+  // app.js uses those events for autosave and could recreate a blank draft.
   function clearCreationForm() {
-    if (!promptInput) return;
+    if (!videoForm || !promptInput) return;
+    videoForm.reset();
     projectNameInput.value = '';
     promptInput.value = '';
     negativeInput.value = '';
@@ -46,15 +48,22 @@
     durationInput.value = '5';
     resolutionInput.value = 'standard';
     frameRateInput.value = '24';
+    promptInput.blur();
     clearResultForNewProject();
+    const counter = $('#charCount');
+    if (counter) counter.textContent = '0 / 4000';
   }
 
   function clearResultForNewProject() {
-    document.querySelector('#videoPlayer')?.removeAttribute('src');
-    document.querySelector('#videoPlayer')?.classList.add('hidden');
-    document.querySelector('#videoLink')?.classList.add('hidden');
-    document.querySelector('#errorBox')?.classList.add('hidden');
-    document.querySelector('#emptyState')?.classList.remove('hidden');
+    const player = $('#videoPlayer');
+    player?.pause?.();
+    player?.removeAttribute('src');
+    player?.load?.();
+    player?.classList.add('hidden');
+    $('#videoLink')?.classList.add('hidden');
+    $('#videoLink')?.removeAttribute('href');
+    $('#errorBox')?.classList.add('hidden');
+    $('#emptyState')?.classList.remove('hidden');
     loadingState?.classList.add('hidden');
     if (statusText) statusText.textContent = 'Sin producción activa';
   }
@@ -62,9 +71,7 @@
   function loadPreviousPrompt(item) {
     if (!item || !promptInput) return;
 
-    // Clear first so no text from the prompt currently on screen can remain.
     clearCreationForm();
-
     projectNameInput.value = item.name || 'Nueva producción';
     promptInput.value = item.prompt || '';
     negativeInput.value = item.negative || '';
@@ -73,7 +80,9 @@
     resolutionInput.value = item.resolution || 'standard';
     frameRateInput.value = String(item.frameRate || 24);
 
-    promptInput.dispatchEvent(new Event('input', { bubbles: true }));
+    // Update only the counter; do not trigger autosave while loading a history item.
+    const counter = $('#charCount');
+    if (counter) counter.textContent = `${promptInput.value.length} / 4000`;
     showView('crear');
     window.scrollTo({ top: 0, behavior: 'smooth' });
     promptInput.focus();
@@ -83,15 +92,12 @@
     return readJson(STORAGE.history, [])[Number(index)] || null;
   }
 
-  // Load a previous prompt with one tap. The prompt is copied back into the editor,
-  // not merely displayed in the history entry.
   history?.addEventListener('click', (event) => {
     const button = event.target.closest('.rerun-history');
     if (!button) return;
     loadPreviousPrompt(itemFromHistory(button.dataset.index));
   });
 
-  // A new project explicitly clears the editor without deleting saved history.
   newProjectBtn?.addEventListener('click', () => {
     clearCreationForm();
     showView('crear');
@@ -99,9 +105,13 @@
     promptInput?.focus();
   });
 
-  // On a fresh page load, do not resurrect the last prompt from browser form state.
-  // This does not touch saved projects or history.
-  clearCreationForm();
+  // Prevent Chrome/Android page restoration from putting the previous prompt back.
+  // This affects only the visible editor, never saved projects/history.
+  const clearOnPageShow = () => {
+    setTimeout(() => clearCreationForm(), 0);
+  };
+  window.addEventListener('pageshow', clearOnPageShow);
+  clearOnPageShow();
 
   cancelBtn?.addEventListener('click', async () => {
     const job = currentJob();
@@ -134,7 +144,6 @@
     }
   });
 
-  // Capture IDs returned by the existing generator so the stop button can act on them.
   const originalFetch = window.fetch.bind(window);
   window.fetch = async (...args) => {
     const response = await originalFetch(...args);
@@ -158,7 +167,6 @@
     return response;
   };
 
-  // Add a clear "Cargar prompt" action to every history item.
   const timer = setInterval(() => {
     const items = readJson(STORAGE.history, []);
     history?.querySelectorAll('.history-item').forEach((row, index) => {
