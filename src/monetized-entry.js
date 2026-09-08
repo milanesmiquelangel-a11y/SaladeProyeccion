@@ -12,6 +12,8 @@ const originalPost = express.application.post;
 const originalGet = express.application.get;
 const originalListen = express.application.listen;
 let writeQueue = Promise.resolve();
+const FREE_CREDITS = 3;
+const FREE_RECHARGE_MS = 24 * 60 * 60 * 1000;
 
 async function readLedger() {
   try { return JSON.parse(await fs.readFile(ledgerPath, 'utf8')); }
@@ -35,7 +37,21 @@ function generationCost(req) {
   return highMultiplier;
 }
 function accountFor(ledger, id) {
-  return ledger.users[id] || { credits: 3, plan: 'Gratis', totalConsumed: 0, createdAt: Date.now() };
+  return ledger.users[id] || {
+    credits: FREE_CREDITS,
+    plan: 'Gratis',
+    totalConsumed: 0,
+    createdAt: Date.now(),
+    nextRechargeAt: Date.now() + FREE_RECHARGE_MS
+  };
+}
+function applyFreeRecharge(account, now = Date.now()) {
+  if (account.plan !== 'Gratis') return false;
+  const next = Number(account.nextRechargeAt || 0);
+  if (!next || now < next) return false;
+  account.credits = Math.min(FREE_CREDITS, Math.max(0, Number(account.credits) || 0) + FREE_CREDITS);
+  account.nextRechargeAt = now + FREE_RECHARGE_MS;
+  return true;
 }
 
 async function billingMiddleware(req, res, next) {
@@ -43,8 +59,15 @@ async function billingMiddleware(req, res, next) {
   if (!id) return res.status(400).json({ error: 'Falta el identificador de cuenta. Recarga la página e inténtalo de nuevo.' });
   const ledger = await readLedger();
   const account = accountFor(ledger, id);
+  const recharged = applyFreeRecharge(account);
   const cost = generationCost(req);
-  if (account.credits < cost) return res.status(402).json({ error: `Créditos insuficientes. Esta generación necesita ${cost} crédito${cost === 1 ? '' : 's'} y tienes ${account.credits}.`, credits: account.credits, required: cost });
+  if (account.credits < cost) {
+    if (recharged) { ledger.users[id] = account; await queueWrite(ledger); }
+    const rechargeText = account.plan === 'Gratis' && account.nextRechargeAt
+      ? ` Próxima recarga gratuita: ${new Date(account.nextRechargeAt).toLocaleString('es-ES')}.`
+      : '';
+    return res.status(402).json({ error: `Créditos insuficientes. Esta generación necesita ${cost} crédito${cost === 1 ? '' : 's'} y tienes ${account.credits}.${rechargeText}`, credits: account.credits, required: cost, nextRechargeAt: account.nextRechargeAt || null });
+  }
   const transactionId = randomUUID();
   account.credits -= cost;
   account.totalConsumed += cost;
@@ -73,7 +96,9 @@ express.application.get = function patchedGet(route, ...handlers) {
       if (!id) return res.status(400).json({ error: 'Cuenta no identificada.' });
       const ledger = await readLedger();
       const account = accountFor(ledger, id);
-      return res.json({ credits: account.credits, plan: account.plan, totalConsumed: account.totalConsumed || 0 });
+      const recharged = applyFreeRecharge(account);
+      if (recharged || !ledger.users[id]) { ledger.users[id] = account; await queueWrite(ledger); }
+      return res.json({ credits: account.credits, plan: account.plan, totalConsumed: account.totalConsumed || 0, nextRechargeAt: account.plan === 'Gratis' ? account.nextRechargeAt : null, freeRechargeCredits: FREE_CREDITS });
     });
     originalGet.call(this, '/api/billing/transactions', async (req, res) => {
       const id = userId(req);
