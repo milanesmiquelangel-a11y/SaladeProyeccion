@@ -2,15 +2,33 @@ import pg from 'pg';
 
 const { Pool } = pg;
 const connectionString = process.env.DATABASE_URL;
+
+function connectionSslMode(url) {
+  if (!url) return null;
+  try {
+    const parsed = new URL(url);
+    const explicit = String(parsed.searchParams.get('sslmode') || '').toLowerCase();
+    if (explicit === 'disable') return 'disable';
+    if (explicit === 'require' || explicit === 'verify-ca' || explicit === 'verify-full') return 'require';
+  } catch {
+    // Let pg report malformed connection strings through the normal health check.
+  }
+  if (process.env.DATABASE_SSL === 'false') return 'disable';
+  if (process.env.DATABASE_SSL === 'true') return 'require';
+  return null;
+}
+
+const sslMode = connectionSslMode(connectionString);
 const pool = connectionString
   ? new Pool({
       connectionString,
       max: 5,
       idleTimeoutMillis: 30000,
       connectionTimeoutMillis: 5000,
-      ssl: process.env.DATABASE_SSL === 'false'
-        ? undefined
-        : { rejectUnauthorized: false }
+      // Render internal PostgreSQL URLs do not require TLS. External URLs
+      // normally include ?sslmode=require. Respect the URL instead of forcing
+      // SSL on every connection.
+      ssl: sslMode === 'require' ? { rejectUnauthorized: false } : undefined
     })
   : null;
 
@@ -28,7 +46,8 @@ export async function checkDatabase() {
     return { configured: true, connected: true, error: null };
   } catch (error) {
     console.error('PostgreSQL health check error:', error);
-    return { configured: true, connected: false, error: error?.message || 'No se pudo conectar con PostgreSQL.' };
+    const code = error?.code ? ` [${error.code}]` : '';
+    return { configured: true, connected: false, error: `${error?.message || 'No se pudo conectar con PostgreSQL.'}${code}` };
   }
 }
 
