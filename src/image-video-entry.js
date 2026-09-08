@@ -52,10 +52,41 @@ async function uploadImage(req, res) {
 async function submitImageVideo(req, body) {
   const imageUrl = absolutePublicUrl(req, body.imageUrl);
   const [width, height] = imageDimensions(body.aspect, body.resolution);
+  const motionPrompt = [
+    String(body.prompt || '').trim(),
+    'Use the supplied reference photograph as the identity and first-frame source.',
+    'Preserve the exact same person throughout the entire clip.',
+    'Do not replace, redesign, reinterpret or regenerate the face.',
+    'Maintain the same facial structure, eyes, eye color, eyebrows, nose, lips, jawline, cheekbones, skin tone, hair color, hairstyle, age and body proportions.',
+    'Only animate the requested motion; keep the person visually identical to the reference image.',
+    'Photorealistic natural motion, stable identity, no facial morphing, no identity drift.'
+  ].filter(Boolean).join(' ');
+  const negative = [
+    'different person',
+    'different face',
+    'identity change',
+    'face morphing',
+    'face replacement',
+    'facial drift',
+    'changed eye color',
+    'changed hair color',
+    'changed hairstyle',
+    'age change',
+    'different body proportions',
+    'deformed face',
+    'distorted face',
+    'duplicate person',
+    'extra face',
+    'extra limbs',
+    'warped hands',
+    'cartoon',
+    'CGI'
+  ].join(', ');
   const payload = {
-    prompt: String(body.prompt || '').trim().slice(0, 4000),
+    prompt: motionPrompt.slice(0, 4000),
     image_url: imageUrl,
-    strength: 0.7,
+    strength: 1.0,
+    negative,
     aspect: ['16:9', '9:16', '1:1'].includes(body.aspect) ? body.aspect : '16:9',
     width,
     height,
