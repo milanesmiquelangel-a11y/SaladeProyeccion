@@ -9,6 +9,7 @@ import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
 import { randomUUID } from 'node:crypto';
 import ffmpegPath from 'ffmpeg-static';
+import { finalizeGeneration, refundGeneration } from './billing-ledger.js';
 
 const execFileAsync = promisify(execFile);
 const app = express();
@@ -126,7 +127,7 @@ function continuityRules() {
 
 const safetyNegative = 'deformed car, malformed vehicle, warped vehicle, melted car, duplicated car, extra wheels, missing wheels, extra tires, broken axle, floating car, sideways driving, diagonal driving, drifting, car off road, car on grass, car in field, car on dirt, car in sand, wheels off asphalt, wheels floating, vehicle crossing road sideways, impossible steering, impossible perspective, distorted road, broken road, duplicate people, merged people, fused bodies, extra arms, extra legs, extra heads, passenger driving, two people in one seat, person behind steering wheel when not driver, distorted hands, unreadable text, warped smartphone, cartoon, CGI look';
 
-async function runSequence(jobId, body) {
+async function runSequence(jobId, body, billing = {}) {
   const totalSeconds = Number(body.duration);
   const clipCount = Math.ceil(totalSeconds / 5);
   const settings = validateGenerationSettings(body);
@@ -155,13 +156,15 @@ async function runSequence(jobId, body) {
     await fs.mkdir(generatedDir, { recursive: true });
     const fileName = `${jobId}.mp4`; const outputPath = path.join(generatedDir, fileName);
     await assembleClips(clipPaths, outputPath);
+    if (billing.userId && billing.transactionId) await finalizeGeneration(billing.userId, billing.transactionId);
     job.status = 'COMPLETED'; job.detail = 'Vídeo promocional listo.'; job.outputUrl = `/generated/${fileName}`;
   } catch (error) {
     console.error('Sequence generation error:', error);
+    if (billing.userId && billing.transactionId) await refundGeneration(billing.userId, billing.transactionId, error?.code === 'CANCELLED' ? 'generation_cancelled' : 'generation_failed');
     if (job?.cancelled || error?.code === 'CANCELLED' || error?.name === 'AbortError') {
-      if (job) { job.status = 'CANCELLED'; job.detail = 'Generación detenida por el usuario.'; }
+      if (job) { job.status = 'CANCELLED'; job.detail = 'Generación detenida por el usuario. El crédito fue devuelto.'; }
     } else if (job) {
-      job.status = 'ERROR'; job.detail = error.message || 'No se pudo completar el vídeo.';
+      job.status = 'ERROR'; job.detail = `${error.message || 'No se pudo completar el vídeo.'} El crédito fue devuelto.`;
     }
   } finally {
     if (job) job.controller = null;
@@ -200,7 +203,7 @@ app.post('/api/video/sequence', async (req, res) => {
   if (prompt.trim().length > 4000) return res.status(400).json({ error: 'prompt no puede superar 4000 caracteres.' });
   const jobId = randomUUID();
   sequenceJobs.set(jobId, { id: jobId, status: 'QUEUED', detail: 'Preparando escenas…', createdAt: Date.now(), cancelled: false, controller: null });
-  runSequence(jobId, { prompt, negative, aspect, duration: selectedDuration, resolution, frameRate }).catch((error) => {
+  runSequence(jobId, { prompt, negative, aspect, duration: selectedDuration, resolution, frameRate }, { userId: req.salaBillingUserId, transactionId: req.salaBillingTransactionId }).catch((error) => {
     const job = sequenceJobs.get(jobId); if (job) { job.status = 'ERROR'; job.detail = error.message || 'No se pudo completar el vídeo.'; }
   });
   return res.status(202).json({ job_id: jobId, duration: selectedDuration });
