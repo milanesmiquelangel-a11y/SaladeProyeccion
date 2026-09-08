@@ -16,6 +16,7 @@
   const statusText = $('#statusText');
   const loadingTitle = $('#loadingTitle');
   const loadingDetail = $('#loadingDetail');
+  const newProjectBtn = $('#newProjectBtn');
 
   function currentJob() {
     const projects = readJson(STORAGE.projects, []);
@@ -34,7 +35,36 @@
     document.querySelectorAll('.nav-btn').forEach((button) => button.classList.toggle('active', button.dataset.view === name));
   }
 
-  function rerun(item) {
+  // Always start a fresh creation with an empty form. Saved projects/history are kept.
+  function clearCreationForm() {
+    if (!promptInput) return;
+    projectNameInput.value = '';
+    promptInput.value = '';
+    negativeInput.value = '';
+    aspectInput.value = '16:9';
+    durationInput.value = '5';
+    resolutionInput.value = 'standard';
+    frameRateInput.value = '24';
+    promptInput.dispatchEvent(new Event('input', { bubbles: true }));
+    clearResultForNewProject();
+  }
+
+  function clearResultForNewProject() {
+    document.querySelector('#videoPlayer')?.removeAttribute('src');
+    document.querySelector('#videoPlayer')?.classList.add('hidden');
+    document.querySelector('#videoLink')?.classList.add('hidden');
+    document.querySelector('#errorBox')?.classList.add('hidden');
+    document.querySelector('#emptyState')?.classList.remove('hidden');
+    loadingState?.classList.add('hidden');
+    if (statusText) statusText.textContent = 'Sin producción activa';
+  }
+
+  function loadPreviousPrompt(item) {
+    if (!item || !promptInput) return;
+
+    // Clear first so no text from the prompt currently on screen can remain.
+    clearCreationForm();
+
     projectNameInput.value = item.name || 'Nueva producción';
     promptInput.value = item.prompt || '';
     negativeInput.value = item.negative || '';
@@ -42,18 +72,36 @@
     durationInput.value = String(item.duration || 5);
     resolutionInput.value = item.resolution || 'standard';
     frameRateInput.value = String(item.frameRate || 24);
+
     promptInput.dispatchEvent(new Event('input', { bubbles: true }));
     showView('crear');
     window.scrollTo({ top: 0, behavior: 'smooth' });
     promptInput.focus();
   }
 
+  function itemFromHistory(index) {
+    return readJson(STORAGE.history, [])[Number(index)] || null;
+  }
+
+  // Load a previous prompt with one tap. The prompt is copied back into the editor,
+  // not merely displayed in the history entry.
   history?.addEventListener('click', (event) => {
     const button = event.target.closest('.rerun-history');
     if (!button) return;
-    const items = readJson(STORAGE.history, []);
-    rerun(items[Number(button.dataset.index)]);
+    loadPreviousPrompt(itemFromHistory(button.dataset.index));
   });
+
+  // A new project explicitly clears the editor without deleting saved history.
+  newProjectBtn?.addEventListener('click', () => {
+    clearCreationForm();
+    showView('crear');
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+    promptInput?.focus();
+  });
+
+  // On a fresh page load, do not resurrect the last prompt from browser form state.
+  // This does not touch saved projects or history.
+  clearCreationForm();
 
   cancelBtn?.addEventListener('click', async () => {
     const job = currentJob();
@@ -110,7 +158,7 @@
     return response;
   };
 
-  // Add a repeat button to each activity item after the base app renders it.
+  // Add a clear "Cargar prompt" action to every history item.
   const timer = setInterval(() => {
     const items = readJson(STORAGE.history, []);
     history?.querySelectorAll('.history-item').forEach((row, index) => {
@@ -119,7 +167,8 @@
       button.type = 'button';
       button.className = 'text-button rerun-history';
       button.dataset.index = String(index);
-      button.textContent = '↻ Generar otra vez';
+      button.textContent = '↻ Cargar prompt';
+      button.title = 'Cargar este prompt en el editor';
       row.appendChild(button);
     });
     refreshCancelButton();
