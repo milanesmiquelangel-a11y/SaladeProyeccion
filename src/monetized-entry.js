@@ -15,6 +15,7 @@ const originalListen = express.application.listen;
 let writeQueue = Promise.resolve();
 const FREE_CREDITS = 3;
 const FREE_RECHARGE_MS = 24 * 60 * 60 * 1000;
+const STALE_GENERATION_MS = 5 * 60 * 1000;
 
 async function readLedger() {
   try { return JSON.parse(await fs.readFile(ledgerPath, 'utf8')); }
@@ -38,9 +39,28 @@ function generationCost(req) {
   return highMultiplier;
 }
 
+async function recoverStaleGenerationReservations(userIdValue) {
+  if (!userIdValue) return 0;
+  const ledger = await readLedger();
+  const cutoff = Date.now() - STALE_GENERATION_MS;
+  const stale = (Array.isArray(ledger.transactions) ? ledger.transactions : [])
+    .filter((tx) => tx.userId === userIdValue && tx.type === 'generation' && tx.status === 'reserved' && Number(tx.createdAt || 0) <= cutoff);
+  let recovered = 0;
+  for (const tx of stale) {
+    try {
+      const result = await refundGeneration(userIdValue, tx.id, 'stale_generation_timeout');
+      if (result?.refunded) recovered += 1;
+    } catch (error) {
+      console.error('Stale generation refund error:', error);
+    }
+  }
+  return recovered;
+}
+
 async function billingMiddleware(req, res, next) {
   const id = userId(req);
   if (!id) return res.status(400).json({ error: 'Falta el identificador de cuenta. Recarga la página e inténtalo de nuevo.' });
+  await recoverStaleGenerationReservations(id);
   const ledger = await readLedger();
   const account = accountFor(ledger, id);
   const recharged = applyFreeRecharge(account);
@@ -103,6 +123,7 @@ express.application.get = function patchedGet(route, ...handlers) {
     originalGet.call(this, '/api/billing/balance', async (req, res) => {
       const id = userId(req);
       if (!id) return res.status(400).json({ error: 'Cuenta no identificada.' });
+      await recoverStaleGenerationReservations(id);
       const ledger = await readLedger();
       const account = accountFor(ledger, id);
       const recharged = applyFreeRecharge(account);
