@@ -12,7 +12,7 @@ let writeQueue = Promise.resolve();
 
 async function readLedger() {
   try { return JSON.parse(await fs.readFile(ledgerPath, 'utf8')); }
-  catch { return { users: {} }; }
+  catch { return { users: {}, transactions: [] }; }
 }
 function queueWrite(data) {
   writeQueue = writeQueue.then(async () => {
@@ -31,17 +31,24 @@ function generationCost(req) {
   if (req.path === '/api/video/sequence') return Math.max(1, Math.ceil(Number(body.duration) / 5 || 1)) * highMultiplier;
   return highMultiplier;
 }
+function accountFor(ledger, id) {
+  return ledger.users[id] || { credits: 3, plan: 'Gratis', totalConsumed: 0, createdAt: Date.now() };
+}
+
 async function billingMiddleware(req, res, next) {
   const id = userId(req);
   if (!id) return res.status(400).json({ error: 'Falta el identificador de cuenta. Recarga la página e inténtalo de nuevo.' });
   const ledger = await readLedger();
-  const account = ledger.users[id] || { credits: 3, plan: 'Gratis', totalConsumed: 0, createdAt: Date.now() };
+  const account = accountFor(ledger, id);
   const cost = generationCost(req);
   if (account.credits < cost) return res.status(402).json({ error: `Créditos insuficientes. Esta generación necesita ${cost} crédito${cost === 1 ? '' : 's'} y tienes ${account.credits}.`, credits: account.credits, required: cost });
   account.credits -= cost;
   account.totalConsumed += cost;
   account.lastGenerationAt = Date.now();
   ledger.users[id] = account;
+  ledger.transactions = Array.isArray(ledger.transactions) ? ledger.transactions : [];
+  ledger.transactions.push({ id: `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`, userId: id, type: 'generation', route: req.path, cost, status: 'reserved', createdAt: Date.now() });
+  if (ledger.transactions.length > 5000) ledger.transactions = ledger.transactions.slice(-5000);
   await queueWrite(ledger);
   res.set('X-Sala-Credits', String(account.credits));
   res.set('X-Sala-Cost', String(cost));
@@ -60,8 +67,15 @@ express.application.get = function patchedGet(route, ...handlers) {
       const id = userId(req);
       if (!id) return res.status(400).json({ error: 'Cuenta no identificada.' });
       const ledger = await readLedger();
-      const account = ledger.users[id] || { credits: 3, plan: 'Gratis', totalConsumed: 0 };
+      const account = accountFor(ledger, id);
       return res.json({ credits: account.credits, plan: account.plan, totalConsumed: account.totalConsumed || 0 });
+    });
+    originalGet.call(this, '/api/billing/transactions', async (req, res) => {
+      const id = userId(req);
+      if (!id) return res.status(400).json({ error: 'Cuenta no identificada.' });
+      const ledger = await readLedger();
+      const items = (Array.isArray(ledger.transactions) ? ledger.transactions : []).filter((item) => item.userId === id).slice(-50).reverse();
+      return res.json({ transactions: items });
     });
   }
   return result;
