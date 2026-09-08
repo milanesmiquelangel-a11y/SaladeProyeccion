@@ -1,4 +1,5 @@
 import express from 'express';
+import './image-video-entry.js';
 import billingRouter from './billing-routes.js';
 import { dbQuery, databaseConfigured } from './database.js';
 import { getAccount, reserveGeneration, refundGeneration, recoverStaleGenerationReservations } from './billing-ledger.js';
@@ -47,7 +48,7 @@ async function billingMiddleware(req, res, next) {
 }
 
 express.application.post = function patchedPost(route, ...handlers) {
-  if (route === '/api/video/generate' || route === '/api/video/sequence') handlers.unshift(billingMiddleware);
+  if (route === '/api/video/generate' || route === '/api/video/sequence' || route === '/api/video/image-to-video') handlers.unshift(billingMiddleware);
   return originalPost.call(this, route, ...handlers);
 };
 
@@ -91,8 +92,6 @@ express.application.listen = function patchedListen(...args) {
   return originalListen.apply(this, args);
 };
 
-// Pixazo generation is asynchronous. Protect status polling from a single stalled network request.
-// Only GET status calls are retried; generation POST requests are never retried to avoid duplicate jobs.
 const nativeFetch = globalThis.fetch.bind(globalThis);
 const PIXAZO_STATUS_HOST = 'gateway.pixazo.ai/v2/requests/status/';
 const PIXAZO_STATUS_TIMEOUT_MS = 30 * 1000;
