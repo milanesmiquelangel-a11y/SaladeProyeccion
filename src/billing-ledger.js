@@ -43,16 +43,30 @@ export async function creditAccount(userId, credits, payment = {}) {
   return { alreadyProcessed: false, credits: account.credits };
 }
 
+export async function finalizeGeneration(userId, transactionId) {
+  if (!userId || !transactionId) return { finalized: false, reason: 'missing_data' };
+  const ledger = await read();
+  ledger.transactions = Array.isArray(ledger.transactions) ? ledger.transactions : [];
+  const tx = ledger.transactions.find((item) => item.id === transactionId && item.userId === userId && item.type === 'generation');
+  if (!tx) return { finalized: false, reason: 'missing_transaction' };
+  if (tx.status === 'refunded') return { finalized: false, reason: 'already_refunded' };
+  tx.status = 'completed';
+  tx.completedAt = Date.now();
+  await write(ledger);
+  return { finalized: true };
+}
+
 export async function refundGeneration(userId, transactionId, reason = 'generation_failed') {
   if (!userId || !transactionId) return { refunded: false, reason: 'missing_data' };
   const ledger = await read();
   ledger.users = ledger.users || {};
   ledger.transactions = Array.isArray(ledger.transactions) ? ledger.transactions : [];
   const tx = ledger.transactions.find((item) => item.id === transactionId && item.userId === userId && item.type === 'generation');
-  if (!tx || tx.status === 'refunded') return { refunded: false, reason: 'already_refunded_or_missing' };
+  if (!tx || tx.status === 'refunded' || tx.status === 'completed') return { refunded: false, reason: 'already_finalized_or_missing' };
   const account = ledger.users[userId];
   if (!account) return { refunded: false, reason: 'account_missing' };
   account.credits = Number(account.credits || 0) + Number(tx.cost || 0);
+  account.totalConsumed = Math.max(0, Number(account.totalConsumed || 0) - Number(tx.cost || 0));
   tx.status = 'refunded';
   tx.refundedAt = Date.now();
   ledger.transactions.push({ id: randomUUID(), userId, type: 'refund', cost: 0, credits: Number(tx.cost || 0), status: 'completed', relatedTransactionId: transactionId, reason, createdAt: Date.now() });
