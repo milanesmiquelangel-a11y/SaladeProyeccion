@@ -20,6 +20,18 @@ export function databaseConfigured() {
   return Boolean(pool);
 }
 
+export async function checkDatabase() {
+  if (!pool) return { configured: false, connected: false, error: 'DATABASE_URL no está configurada.' };
+  try {
+    await ensureSchema();
+    await pool.query('SELECT 1');
+    return { configured: true, connected: true, error: null };
+  } catch (error) {
+    console.error('PostgreSQL health check error:', error);
+    return { configured: true, connected: false, error: error?.message || 'No se pudo conectar con PostgreSQL.' };
+  }
+}
+
 export async function dbQuery(text, params = []) {
   if (!pool) throw new Error('DATABASE_URL no está configurada. Conecta una base de datos PostgreSQL de Render.');
   await ensureSchema();
