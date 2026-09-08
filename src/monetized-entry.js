@@ -184,7 +184,10 @@ async function fetchWithTimeout(input, init, timeoutMs) {
 
 globalThis.fetch = async (input, init = {}) => {
   const url = typeof input === 'string' ? input : input?.url || '';
-  const method = String(init.method || (input instanceof Request ? input.method : 'GET')).toUpperCase();
+  // Avoid relying on a bare Request global. Node 18+ provides Request, but checking
+  // the input's own method is safer across supported runtimes and fetch implementations.
+  const inputMethod = typeof input?.method === 'string' ? input.method : 'GET';
+  const method = String(init.method || inputMethod).toUpperCase();
   const isStatusPoll = method === 'GET' && url.includes(PIXAZO_STATUS_HOST);
   if (!isStatusPoll) return nativeFetch(input, init);
 
