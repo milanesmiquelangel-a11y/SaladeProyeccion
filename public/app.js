@@ -40,7 +40,7 @@ const templates = {
 let pollTimer;
 let currentRequestId = null;
 let currentSequenceId = null;
-const GENERATION_TIMEOUT_MS = 5 * 60 * 1000;
+const GENERATION_TIMEOUT_MS = 20 * 60 * 1000;
 
 function readJson(key, fallback) { try { return JSON.parse(localStorage.getItem(key) || JSON.stringify(fallback)); } catch { return fallback; } }
 function writeJson(key, value) { localStorage.setItem(key, JSON.stringify(value)); }
@@ -194,7 +194,7 @@ async function pollStatus(requestId, project, startedAt = Date.now()) {
     if (Date.now() - startedAt >= GENERATION_TIMEOUT_MS) {
       const result = await cancelTimedOutGeneration(requestId);
       loadingState.classList.add('hidden'); statusText.textContent = 'Tiempo agotado';
-      showError(result.data?.creditRefunded ? 'La generación superó 5 minutos. Fue cancelada y el crédito fue devuelto.' : 'La generación superó 5 minutos. Fue cancelada; el servidor actualizará el saldo automáticamente.');
+      showError(result.data?.creditRefunded ? 'La generación superó 20 minutos. Fue cancelada y el crédito fue devuelto.' : 'La generación superó 20 minutos. Fue cancelada; el servidor actualizará el saldo automáticamente.');
       generateBtn.disabled = false;
       return;
     }
