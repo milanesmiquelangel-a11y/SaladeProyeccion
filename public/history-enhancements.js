@@ -50,8 +50,6 @@
     if (statusText) statusText.textContent = 'Sin producción activa';
   }
 
-  // Clear only the visible editor. Do not dispatch input/change events because
-  // app.js uses those events for autosave.
   function clearCreationForm() {
     if (!videoForm || !promptInput) return;
     projectNameInput.value = '';
@@ -124,16 +122,23 @@
     promptInput?.focus();
   });
 
-  // Explicitly create the clearing action in case the HTML is cached.
   addClearPromptButton();
 
-  // Chrome/Android can restore form values after JavaScript has run. Clear on
-  // load/pageshow and also before leaving so a bfcache snapshot cannot resurrect it.
   const clearAfterRestore = () => setTimeout(() => clearCreationForm(), 0);
   window.addEventListener('load', clearAfterRestore);
   window.addEventListener('pageshow', clearAfterRestore);
   window.addEventListener('pagehide', clearCreationForm);
   clearCreationForm();
+
+  async function refreshBillingBalance() {
+    try {
+      const response = await fetch('/api/billing/balance', { cache: 'no-store' });
+      const data = await response.json().catch(() => ({}));
+      if (response.ok && Number.isFinite(Number(data.credits))) {
+        window.dispatchEvent(new CustomEvent('sala-billing-updated', { detail: data }));
+      }
+    } catch {}
+  }
 
   cancelBtn?.addEventListener('click', async () => {
     const job = currentJob();
@@ -156,9 +161,13 @@
       if (loadingState) loadingState.classList.add('hidden');
       if (statusText) statusText.textContent = 'Generación detenida';
       if (loadingTitle) loadingTitle.textContent = 'Generación detenida';
-      if (loadingDetail) loadingDetail.textContent = 'Puedes volver a generarla desde Actividad reciente.';
+      if (loadingDetail) loadingDetail.textContent = data.creditRefunded
+        ? 'Generación cancelada. El crédito fue devuelto.'
+        : 'Generación cancelada. Actualizando el saldo…';
       cancelBtn.textContent = '⏹ Detener generación';
       refreshCancelButton();
+      await refreshBillingBalance();
+      setTimeout(refreshBillingBalance, 1500);
     } catch (error) {
       cancelBtn.disabled = false;
       cancelBtn.textContent = '⏹ Detener generación';
