@@ -23,7 +23,7 @@ const generatedDir = path.join(publicDir, 'generated');
 const sequenceJobs = new Map();
 const cancelledRequests = new Set();
 const generationBilling = new Map();
-const GENERATION_TIMEOUT_MS = 5 * 60 * 1000;
+const GENERATION_TIMEOUT_MS = 20 * 60 * 1000;
 
 app.use(cors());
 app.use(express.json({ limit: '1mb', verify: (req, _res, buf) => { req.rawBody = Buffer.from(buf); } }));
@@ -74,7 +74,7 @@ async function waitForPixazo(requestId, onState, signal, timeoutMs = GENERATION_
   const deadline = Date.now() + timeoutMs;
   for (;;) {
     if (signal?.aborted) throw Object.assign(new Error('Generación cancelada.'), { code: 'CANCELLED' });
-    if (Date.now() >= deadline) throw Object.assign(new Error('La generación superó el límite de 5 minutos y fue cancelada. El crédito fue devuelto.'), { code: 'TIMEOUT' });
+    if (Date.now() >= deadline) throw Object.assign(new Error('La generación superó el límite de 20 minutos y fue cancelada. El crédito fue devuelto.'), { code: 'TIMEOUT' });
     const response = await fetch(`${PIXAZO_STATUS_URL}/${encodeURIComponent(requestId)}`, { signal, headers: { 'Ocp-Apim-Subscription-Key': PIXAZO_API_KEY } });
     const data = await response.json().catch(() => ({}));
     if (!response.ok) {
@@ -276,7 +276,7 @@ app.get('/api/video/status/:requestId', async (req, res) => {
       cancelledRequests.add(requestId);
       const settled = clearGenerationBilling(requestId);
       if (settled) await refundGeneration(settled.userId, settled.transactionId, 'generation_timeout');
-      return res.json({ status: 'CANCELLED', request_id: requestId, error: 'La generación superó el límite de 5 minutos. El crédito fue devuelto.', creditRefunded: true });
+      return res.json({ status: 'CANCELLED', request_id: requestId, error: 'La generación superó el límite de 20 minutos. El crédito fue devuelto.', creditRefunded: true });
     }
     const response = await fetch(`${PIXAZO_STATUS_URL}/${encodeURIComponent(requestId)}`, { headers: { 'Ocp-Apim-Subscription-Key': PIXAZO_API_KEY } });
     const data = await response.json().catch(() => ({}));
