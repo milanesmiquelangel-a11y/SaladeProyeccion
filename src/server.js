@@ -10,6 +10,7 @@ import { fileURLToPath } from 'node:url';
 import { randomUUID } from 'node:crypto';
 import ffmpegPath from 'ffmpeg-static';
 import { finalizeGeneration, refundGeneration } from './billing-ledger.js';
+import { databaseConfigured } from './database.js';
 
 const execFileAsync = promisify(execFile);
 const app = express();
@@ -30,7 +31,7 @@ app.use(express.json({ limit: '1mb', verify: (req, _res, buf) => { req.rawBody =
 app.use(express.static(publicDir));
 
 app.get('/api/health', (_req, res) => {
-  res.json({ ok: true, service: 'sala-de-proyeccion-api', provider: 'Pixazo LTX 2.5 Free', generationReady: Boolean(PIXAZO_API_KEY), pixazoConfigured: Boolean(PIXAZO_API_KEY), sequenceAssembly: Boolean(ffmpegPath), generationTimeoutSeconds: GENERATION_TIMEOUT_MS / 1000 });
+  res.json({ ok: true, service: 'sala-de-proyeccion-api', provider: 'Pixazo LTX 2.5 Free', generationReady: Boolean(PIXAZO_API_KEY) && databaseConfigured(), pixazoConfigured: Boolean(PIXAZO_API_KEY), billingPersistence: databaseConfigured(), sequenceAssembly: Boolean(ffmpegPath), generationTimeoutSeconds: GENERATION_TIMEOUT_MS / 1000 });
 });
 
 function dimensionsFor(aspect, quality) {
@@ -142,8 +143,7 @@ async function runSequence(jobId, body, billing = {}) {
     for (let index = 0; index < clipCount; index += 1) {
       if (!job || job.cancelled) throw Object.assign(new Error('Generación cancelada.'), { code: 'CANCELLED' });
       job.status = 'PROCESSING'; job.currentScene = index + 1; job.totalScenes = clipCount; job.detail = `Generando escena ${index + 1} de ${clipCount}…`;
-      const controller = new AbortController();
-      job.controller = controller;
+      const controller = new AbortController(); job.controller = controller;
       const scenePrompt = `${body.prompt.trim()}\n\n${sceneDirection(index, clipCount)}\n${continuityRules()}\nVisual style: photorealistic cinematic commercial, realistic physics, natural motion, professional automotive advertising, physically correct road contact, clean composition.`;
       const combinedNegative = [body.negative?.trim(), safetyNegative].filter(Boolean).join(', ');
       const requestId = await submitPixazo(scenePrompt, combinedNegative, settings, controller.signal);
@@ -152,53 +152,35 @@ async function runSequence(jobId, body, billing = {}) {
       const mediaUrl = await waitForPixazo(requestId, (state) => { job.providerState = state; job.detail = `Escena ${index + 1} de ${clipCount}: ${state || 'procesando'}…`; }, controller.signal);
       if (job.cancelled) throw Object.assign(new Error('Generación cancelada.'), { code: 'CANCELLED' });
       const clipPath = path.join(jobDir, `scene-${String(index + 1).padStart(2, '0')}.mp4`);
-      await downloadVideo(mediaUrl, clipPath); clipPaths.push(clipPath);
-      job.controller = null;
+      await downloadVideo(mediaUrl, clipPath); clipPaths.push(clipPath); job.controller = null;
     }
     if (job.cancelled) throw Object.assign(new Error('Generación cancelada.'), { code: 'CANCELLED' });
-    job.detail = 'Uniendo las escenas en el vídeo final…';
-    await fs.mkdir(generatedDir, { recursive: true });
-    const fileName = `${jobId}.mp4`; const outputPath = path.join(generatedDir, fileName);
-    await assembleClips(clipPaths, outputPath);
+    job.detail = 'Uniendo las escenas en el vídeo final…'; await fs.mkdir(generatedDir, { recursive: true });
+    const fileName = `${jobId}.mp4`; const outputPath = path.join(generatedDir, fileName); await assembleClips(clipPaths, outputPath);
     if (billing.userId && billing.transactionId) await finalizeGeneration(billing.userId, billing.transactionId);
     job.status = 'COMPLETED'; job.detail = 'Vídeo promocional listo.'; job.outputUrl = `/generated/${fileName}`;
   } catch (error) {
     console.error('Sequence generation error:', error);
     if (billing.userId && billing.transactionId) await refundGeneration(billing.userId, billing.transactionId, error?.code === 'CANCELLED' ? 'generation_cancelled' : 'generation_failed');
-    if (job?.cancelled || error?.code === 'CANCELLED' || error?.name === 'AbortError') {
-      if (job) { job.status = 'CANCELLED'; job.detail = 'Generación detenida por el usuario. El crédito fue devuelto.'; }
-    } else if (job) {
-      job.status = 'ERROR'; job.detail = `${error.message || 'No se pudo completar el vídeo.'} El crédito fue devuelto.`;
-    }
-  } finally {
-    if (job) job.controller = null;
-    await fs.rm(jobDir, { recursive: true, force: true });
-  }
+    if (job?.cancelled || error?.code === 'CANCELLED' || error?.name === 'AbortError') { if (job) { job.status = 'CANCELLED'; job.detail = 'Generación detenida por el usuario. El crédito fue devuelto.'; } }
+    else if (job) { job.status = 'ERROR'; job.detail = `${error.message || 'No se pudo completar el vídeo.'} El crédito fue devuelto.`; }
+  } finally { if (job) job.controller = null; await fs.rm(jobDir, { recursive: true, force: true }); }
 }
 
 function trackGenerationBilling(requestId, userId, transactionId) {
   if (!requestId || !userId || !transactionId) return;
   const timer = setTimeout(async () => {
-    const billing = generationBilling.get(requestId);
-    if (!billing) return;
-    try {
-      cancelledRequests.add(requestId);
-      await refundGeneration(billing.userId, billing.transactionId, 'generation_timeout');
-    } catch (error) {
-      console.error('Billing timeout refund error:', error);
-    } finally {
-      generationBilling.delete(requestId);
-    }
+    const billing = generationBilling.get(requestId); if (!billing) return;
+    try { cancelledRequests.add(requestId); await refundGeneration(billing.userId, billing.transactionId, 'generation_timeout'); }
+    catch (error) { console.error('Billing timeout refund error:', error); }
+    finally { generationBilling.delete(requestId); }
   }, GENERATION_TIMEOUT_MS);
   generationBilling.set(requestId, { userId, transactionId, createdAt: Date.now(), timer });
 }
 
 function clearGenerationBilling(requestId) {
-  const billing = generationBilling.get(requestId);
-  if (!billing) return null;
-  if (billing.timer) clearTimeout(billing.timer);
-  generationBilling.delete(requestId);
-  return billing;
+  const billing = generationBilling.get(requestId); if (!billing) return null;
+  if (billing.timer) clearTimeout(billing.timer); generationBilling.delete(requestId); return billing;
 }
 
 app.post('/api/video/generate', async (req, res) => {
@@ -219,89 +201,54 @@ app.post('/api/video/generate', async (req, res) => {
 });
 
 app.post('/api/video/cancel/:requestId', async (req, res) => {
-  const requestId = String(req.params.requestId || '').trim();
-  if (!requestId) return res.status(400).json({ error: 'Falta el identificador de generación.' });
-  cancelledRequests.add(requestId);
-  const billing = clearGenerationBilling(requestId);
-  let creditRefunded = false;
-  if (billing) {
-    const result = await refundGeneration(billing.userId, billing.transactionId, 'generation_cancelled');
-    creditRefunded = Boolean(result?.refunded || result?.reason === 'already_finalized_or_missing');
-  }
+  const requestId = String(req.params.requestId || '').trim(); if (!requestId) return res.status(400).json({ error: 'Falta el identificador de generación.' });
+  cancelledRequests.add(requestId); const billing = clearGenerationBilling(requestId); let creditRefunded = false;
+  if (billing) { const result = await refundGeneration(billing.userId, billing.transactionId, 'generation_cancelled'); creditRefunded = Boolean(result?.refunded || result?.reason === 'already_finalized_or_missing'); }
   return res.json({ ok: true, status: 'CANCELLED', request_id: requestId, creditRefunded });
 });
 
 app.post('/api/video/sequence', async (req, res) => {
   if (!PIXAZO_API_KEY) return res.status(503).json({ error: 'PIXAZO_API_KEY no está configurada en el servidor.' });
   const { prompt, negative, aspect, duration, resolution, frameRate } = req.body ?? {};
-  const allowedDurations = new Set([10, 15, 30, 60]);
-  const selectedDuration = allowedDurations.has(Number(duration)) ? Number(duration) : 10;
+  const allowedDurations = new Set([10, 15, 30, 60]); const selectedDuration = allowedDurations.has(Number(duration)) ? Number(duration) : 10;
   if (typeof prompt !== 'string' || prompt.trim().length === 0) return res.status(400).json({ error: 'prompt es obligatorio.' });
   if (prompt.trim().length > 4000) return res.status(400).json({ error: 'prompt no puede superar 4000 caracteres.' });
-  const jobId = randomUUID();
-  const billing = { userId: req.salaBillingUserId, transactionId: req.salaBillingTransactionId };
+  const jobId = randomUUID(); const billing = { userId: req.salaBillingUserId, transactionId: req.salaBillingTransactionId };
   sequenceJobs.set(jobId, { id: jobId, status: 'QUEUED', detail: 'Preparando escenas…', createdAt: Date.now(), cancelled: false, controller: null, billing });
-  runSequence(jobId, { prompt, negative, aspect, duration: selectedDuration, resolution, frameRate }, billing).catch((error) => {
-    const job = sequenceJobs.get(jobId); if (job) { job.status = 'ERROR'; job.detail = error.message || 'No se pudo completar el vídeo.'; }
-  });
+  runSequence(jobId, { prompt, negative, aspect, duration: selectedDuration, resolution, frameRate }, billing).catch((error) => { const job = sequenceJobs.get(jobId); if (job) { job.status = 'ERROR'; job.detail = error.message || 'No se pudo completar el vídeo.'; } });
   return res.status(202).json({ job_id: jobId, duration: selectedDuration });
 });
 
 app.post('/api/video/sequence/:jobId/cancel', async (req, res) => {
-  const job = sequenceJobs.get(String(req.params.jobId || ''));
-  if (!job) return res.status(404).json({ error: 'No se encontró la generación.' });
-  job.cancelled = true;
-  if (job.controller) job.controller.abort();
-  let creditRefunded = false;
-  if (job.billing?.userId && job.billing?.transactionId) {
-    const result = await refundGeneration(job.billing.userId, job.billing.transactionId, 'generation_cancelled');
-    creditRefunded = Boolean(result.refunded || result.reason === 'already_finalized_or_missing');
-  }
+  const job = sequenceJobs.get(String(req.params.jobId || '')); if (!job) return res.status(404).json({ error: 'No se encontró la generación.' });
+  job.cancelled = true; if (job.controller) job.controller.abort(); let creditRefunded = false;
+  if (job.billing?.userId && job.billing?.transactionId) { const result = await refundGeneration(job.billing.userId, job.billing.transactionId, 'generation_cancelled'); creditRefunded = Boolean(result.refunded || result.reason === 'already_finalized_or_missing'); }
   return res.json({ ok: true, status: 'CANCELLED', job_id: job.id, creditRefunded });
 });
 
 app.get('/api/video/sequence/:jobId', (req, res) => {
-  const job = sequenceJobs.get(String(req.params.jobId || ''));
-  if (!job) return res.status(404).json({ error: 'No se encontró la generación.' });
+  const job = sequenceJobs.get(String(req.params.jobId || '')); if (!job) return res.status(404).json({ error: 'No se encontró la generación.' });
   return res.json({ ...job, controller: undefined, billing: undefined });
 });
 
 app.get('/api/video/status/:requestId', async (req, res) => {
   if (!PIXAZO_API_KEY) return res.status(503).json({ error: 'PIXAZO_API_KEY no está configurada en el servidor.' });
-  const requestId = String(req.params.requestId || '').trim();
-  if (!requestId) return res.status(400).json({ error: 'Falta el identificador de generación.' });
+  const requestId = String(req.params.requestId || '').trim(); if (!requestId) return res.status(400).json({ error: 'Falta el identificador de generación.' });
   try {
     const billing = generationBilling.get(requestId);
     if (billing && Date.now() - billing.createdAt >= GENERATION_TIMEOUT_MS) {
-      cancelledRequests.add(requestId);
-      const settled = clearGenerationBilling(requestId);
-      if (settled) await refundGeneration(settled.userId, settled.transactionId, 'generation_timeout');
+      cancelledRequests.add(requestId); const settled = clearGenerationBilling(requestId); if (settled) await refundGeneration(settled.userId, settled.transactionId, 'generation_timeout');
       return res.json({ status: 'CANCELLED', request_id: requestId, error: 'La generación superó el límite de 20 minutos. El crédito fue devuelto.', creditRefunded: true });
     }
     const response = await fetch(`${PIXAZO_STATUS_URL}/${encodeURIComponent(requestId)}`, { headers: { 'Ocp-Apim-Subscription-Key': PIXAZO_API_KEY } });
     const data = await response.json().catch(() => ({}));
-    if (!response.ok) {
-      const activeBilling = clearGenerationBilling(requestId);
-      if (activeBilling) await refundGeneration(activeBilling.userId, activeBilling.transactionId, 'status_check_failed');
-      return res.status(response.status).json({ error: data?.message || data?.error || 'Pixazo no pudo consultar el estado.' });
-    }
-    if (cancelledRequests.has(requestId)) {
-      const activeBilling = clearGenerationBilling(requestId);
-      if (activeBilling) await refundGeneration(activeBilling.userId, activeBilling.transactionId, 'generation_cancelled');
-      return res.json({ ...data, status: 'CANCELLED', creditRefunded: true });
-    }
+    if (!response.ok) { const activeBilling = clearGenerationBilling(requestId); if (activeBilling) await refundGeneration(activeBilling.userId, activeBilling.transactionId, 'status_check_failed'); return res.status(response.status).json({ error: data?.message || data?.error || 'Pixazo no pudo consultar el estado.' }); }
+    if (cancelledRequests.has(requestId)) { const activeBilling = clearGenerationBilling(requestId); if (activeBilling) await refundGeneration(activeBilling.userId, activeBilling.transactionId, 'generation_cancelled'); return res.json({ ...data, status: 'CANCELLED', creditRefunded: true }); }
     const state = String(data.status || data.state || '').toUpperCase();
-    if (state === 'COMPLETED' || state === 'SUCCEEDED' || data.output?.media_url) {
-      const activeBilling = clearGenerationBilling(requestId);
-      if (activeBilling) await finalizeGeneration(activeBilling.userId, activeBilling.transactionId);
-    } else if (['ERROR', 'FAILED', 'CANCELLED'].includes(state)) {
-      const activeBilling = clearGenerationBilling(requestId);
-      if (activeBilling) await refundGeneration(activeBilling.userId, activeBilling.transactionId, state === 'CANCELLED' ? 'generation_cancelled' : 'generation_failed');
-    }
+    if (state === 'COMPLETED' || state === 'SUCCEEDED' || data.output?.media_url) { const activeBilling = clearGenerationBilling(requestId); if (activeBilling) await finalizeGeneration(activeBilling.userId, activeBilling.transactionId); }
+    else if (['ERROR', 'FAILED', 'CANCELLED'].includes(state)) { const activeBilling = clearGenerationBilling(requestId); if (activeBilling) await refundGeneration(activeBilling.userId, activeBilling.transactionId, state === 'CANCELLED' ? 'generation_cancelled' : 'generation_failed'); }
     return res.json(data);
-  } catch (error) {
-    return res.status(502).json({ error: error.message || 'No se pudo consultar el estado.' });
-  }
+  } catch (error) { return res.status(502).json({ error: error.message || 'No se pudo consultar el estado.' }); }
 });
 
 app.get('/api/video/file/:jobId', (req, res) => {
