@@ -36,24 +36,6 @@
     document.querySelectorAll('.nav-btn').forEach((button) => button.classList.toggle('active', button.dataset.view === name));
   }
 
-  // Clear only the visible editor. Never fire input/change events here because
-  // app.js uses those events for autosave and could recreate a blank draft.
-  function clearCreationForm() {
-    if (!videoForm || !promptInput) return;
-    videoForm.reset();
-    projectNameInput.value = '';
-    promptInput.value = '';
-    negativeInput.value = '';
-    aspectInput.value = '16:9';
-    durationInput.value = '5';
-    resolutionInput.value = 'standard';
-    frameRateInput.value = '24';
-    promptInput.blur();
-    clearResultForNewProject();
-    const counter = $('#charCount');
-    if (counter) counter.textContent = '0 / 4000';
-  }
-
   function clearResultForNewProject() {
     const player = $('#videoPlayer');
     player?.pause?.();
@@ -68,9 +50,48 @@
     if (statusText) statusText.textContent = 'Sin producción activa';
   }
 
+  // Clear only the visible editor. Do not dispatch input/change events because
+  // app.js uses those events for autosave.
+  function clearCreationForm() {
+    if (!videoForm || !promptInput) return;
+    projectNameInput.value = '';
+    promptInput.value = '';
+    negativeInput.value = '';
+    aspectInput.value = '16:9';
+    durationInput.value = '5';
+    resolutionInput.value = 'standard';
+    frameRateInput.value = '24';
+    promptInput.defaultValue = '';
+    negativeInput.defaultValue = '';
+    projectNameInput.defaultValue = '';
+    promptInput.setAttribute('autocomplete', 'off');
+    videoForm.setAttribute('autocomplete', 'off');
+    promptInput.blur();
+    const counter = $('#charCount');
+    if (counter) counter.textContent = '0 / 4000';
+    clearResultForNewProject();
+  }
+
+  function addClearPromptButton() {
+    if (!promptInput || $('#clearPromptBtn')) return;
+    const button = document.createElement('button');
+    button.id = 'clearPromptBtn';
+    button.type = 'button';
+    button.className = 'text-button';
+    button.textContent = 'Limpiar prompt';
+    button.title = 'Borrar el prompt actual';
+    button.style.display = 'block';
+    button.style.margin = '6px 0 8px auto';
+    promptInput.insertAdjacentElement('afterend', button);
+    button.addEventListener('click', () => {
+      clearCreationForm();
+      showView('crear');
+      promptInput.focus();
+    });
+  }
+
   function loadPreviousPrompt(item) {
     if (!item || !promptInput) return;
-
     clearCreationForm();
     projectNameInput.value = item.name || 'Nueva producción';
     promptInput.value = item.prompt || '';
@@ -79,8 +100,6 @@
     durationInput.value = String(item.duration || 5);
     resolutionInput.value = item.resolution || 'standard';
     frameRateInput.value = String(item.frameRate || 24);
-
-    // Update only the counter; do not trigger autosave while loading a history item.
     const counter = $('#charCount');
     if (counter) counter.textContent = `${promptInput.value.length} / 4000`;
     showView('crear');
@@ -105,13 +124,16 @@
     promptInput?.focus();
   });
 
-  // Prevent Chrome/Android page restoration from putting the previous prompt back.
-  // This affects only the visible editor, never saved projects/history.
-  const clearOnPageShow = () => {
-    setTimeout(() => clearCreationForm(), 0);
-  };
-  window.addEventListener('pageshow', clearOnPageShow);
-  clearOnPageShow();
+  // Explicitly create the clearing action in case the HTML is cached.
+  addClearPromptButton();
+
+  // Chrome/Android can restore form values after JavaScript has run. Clear on
+  // load/pageshow and also before leaving so a bfcache snapshot cannot resurrect it.
+  const clearAfterRestore = () => setTimeout(() => clearCreationForm(), 0);
+  window.addEventListener('load', clearAfterRestore);
+  window.addEventListener('pageshow', clearAfterRestore);
+  window.addEventListener('pagehide', clearCreationForm);
+  clearCreationForm();
 
   cancelBtn?.addEventListener('click', async () => {
     const job = currentJob();
