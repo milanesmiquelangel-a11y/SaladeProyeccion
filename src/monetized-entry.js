@@ -2,6 +2,7 @@ import express from 'express';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { randomUUID } from 'node:crypto';
 import billingRouter from './billing-routes.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -14,7 +15,7 @@ let writeQueue = Promise.resolve();
 
 async function readLedger() {
   try { return JSON.parse(await fs.readFile(ledgerPath, 'utf8')); }
-  catch { return { users: {}, transactions: [], payments: [] }; }
+  catch { return { users: {}, transactions: [], payments: [], processedEvents: [] }; }
 }
 function queueWrite(data) {
   writeQueue = writeQueue.then(async () => {
@@ -44,16 +45,18 @@ async function billingMiddleware(req, res, next) {
   const account = accountFor(ledger, id);
   const cost = generationCost(req);
   if (account.credits < cost) return res.status(402).json({ error: `Créditos insuficientes. Esta generación necesita ${cost} crédito${cost === 1 ? '' : 's'} y tienes ${account.credits}.`, credits: account.credits, required: cost });
+  const transactionId = randomUUID();
   account.credits -= cost;
   account.totalConsumed += cost;
   account.lastGenerationAt = Date.now();
   ledger.users[id] = account;
   ledger.transactions = Array.isArray(ledger.transactions) ? ledger.transactions : [];
-  ledger.transactions.push({ id: `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`, userId: id, type: 'generation', route: req.path, cost, status: 'reserved', createdAt: Date.now() });
+  ledger.transactions.push({ id: transactionId, userId: id, type: 'generation', route: req.path, cost, status: 'reserved', createdAt: Date.now() });
   if (ledger.transactions.length > 5000) ledger.transactions = ledger.transactions.slice(-5000);
   await queueWrite(ledger);
   res.set('X-Sala-Credits', String(account.credits));
   res.set('X-Sala-Cost', String(cost));
+  res.set('X-Sala-Transaction-Id', transactionId);
   next();
 }
 
