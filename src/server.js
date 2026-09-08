@@ -23,7 +23,7 @@ const sequenceJobs = new Map();
 const cancelledRequests = new Set();
 
 app.use(cors());
-app.use(express.json({ limit: '1mb' }));
+app.use(express.json({ limit: '1mb', verify: (req, _res, buf) => { req.rawBody = Buffer.from(buf); } }));
 app.use(express.static(publicDir));
 
 app.get('/api/health', (_req, res) => {
@@ -195,51 +195,49 @@ app.post('/api/video/sequence', async (req, res) => {
   if (!PIXAZO_API_KEY) return res.status(503).json({ error: 'PIXAZO_API_KEY no está configurada en el servidor.' });
   const { prompt, negative, aspect, duration, resolution, frameRate } = req.body ?? {};
   const allowedDurations = new Set([10, 15, 30, 60]);
-  const selectedDuration = Number(duration);
+  const selectedDuration = allowedDurations.has(Number(duration)) ? Number(duration) : 10;
   if (typeof prompt !== 'string' || prompt.trim().length === 0) return res.status(400).json({ error: 'prompt es obligatorio.' });
   if (prompt.trim().length > 4000) return res.status(400).json({ error: 'prompt no puede superar 4000 caracteres.' });
-  if (!allowedDurations.has(selectedDuration)) return res.status(400).json({ error: 'La duración promocional debe ser 10, 15, 30 o 60 segundos.' });
   const jobId = randomUUID();
-  sequenceJobs.set(jobId, { id: jobId, status: 'QUEUED', currentScene: 0, totalScenes: Math.ceil(selectedDuration / 5), providerState: 'QUEUED', detail: 'Producción en cola…', outputUrl: '', cancelled: false, controller: null, providerRequestId: '' });
-  runSequence(jobId, { prompt: prompt.trim(), negative, aspect, duration: selectedDuration, resolution, frameRate }).catch((error) => { const job = sequenceJobs.get(jobId); if (job && !job.cancelled) { job.status = 'ERROR'; job.detail = error.message || 'Error inesperado.'; } });
-  return res.status(202).json({ job_id: jobId, duration: selectedDuration, scenes: Math.ceil(selectedDuration / 5) });
+  sequenceJobs.set(jobId, { id: jobId, status: 'QUEUED', detail: 'Preparando escenas…', createdAt: Date.now(), cancelled: false, controller: null });
+  runSequence(jobId, { prompt, negative, aspect, duration: selectedDuration, resolution, frameRate }).catch((error) => {
+    const job = sequenceJobs.get(jobId); if (job) { job.status = 'ERROR'; job.detail = error.message || 'No se pudo completar el vídeo.'; }
+  });
+  return res.status(202).json({ job_id: jobId, duration: selectedDuration });
 });
 
 app.post('/api/video/sequence/:jobId/cancel', (req, res) => {
-  const job = sequenceJobs.get(req.params.jobId);
-  if (!job) return res.status(404).json({ error: 'No se encontró la producción.' });
-  if (['COMPLETED', 'ERROR', 'CANCELLED'].includes(job.status)) return res.json({ ok: true, status: job.status, detail: job.detail });
+  const job = sequenceJobs.get(String(req.params.jobId || ''));
+  if (!job) return res.status(404).json({ error: 'No se encontró la generación.' });
   job.cancelled = true;
-  job.status = 'CANCELLED';
-  job.detail = 'Generación detenida por el usuario.';
-  job.controller?.abort();
+  if (job.controller) job.controller.abort();
   return res.json({ ok: true, status: 'CANCELLED', job_id: job.id });
 });
 
 app.get('/api/video/sequence/:jobId', (req, res) => {
-  const job = sequenceJobs.get(req.params.jobId);
-  if (!job) return res.status(404).json({ error: 'No se encontró la producción.' });
-  return res.json(job);
+  const job = sequenceJobs.get(String(req.params.jobId || ''));
+  if (!job) return res.status(404).json({ error: 'No se encontró la generación.' });
+  return res.json({ ...job, controller: undefined });
 });
 
 app.get('/api/video/status/:requestId', async (req, res) => {
   if (!PIXAZO_API_KEY) return res.status(503).json({ error: 'PIXAZO_API_KEY no está configurada en el servidor.' });
-  const rawRequestId = String(req.params.requestId || '');
-  if (cancelledRequests.has(rawRequestId)) return res.json({ status: 'CANCELLED', request_id: rawRequestId });
-  const requestId = encodeURIComponent(rawRequestId);
+  const requestId = String(req.params.requestId || '').trim();
+  if (!requestId) return res.status(400).json({ error: 'Falta el identificador de generación.' });
   try {
-    const response = await fetch(`${PIXAZO_STATUS_URL}/${requestId}`, { headers: { 'Ocp-Apim-Subscription-Key': PIXAZO_API_KEY } });
+    const response = await fetch(`${PIXAZO_STATUS_URL}/${encodeURIComponent(requestId)}`, { headers: { 'Ocp-Apim-Subscription-Key': PIXAZO_API_KEY } });
     const data = await response.json().catch(() => ({}));
-    if (!response.ok) {
-      const providerMessage = data?.message || data?.error || data?.detail;
-      return res.status(response.status).json({ error: providerMessage ? `Pixazo no pudo consultar el trabajo: ${providerMessage}` : `Pixazo no pudo consultar el trabajo (HTTP ${response.status}).`, details: data });
-    }
+    if (!response.ok) return res.status(response.status).json({ error: data?.message || data?.error || 'Pixazo no pudo consultar el estado.' });
+    if (cancelledRequests.has(requestId)) return res.json({ ...data, status: 'CANCELLED' });
     return res.json(data);
   } catch (error) {
-    console.error('Pixazo status error:', error); return res.status(502).json({ error: 'No se pudo consultar el estado en Pixazo.' });
+    return res.status(502).json({ error: error.message || 'No se pudo consultar el estado.' });
   }
 });
 
-app.get('*', (_req, res) => res.sendFile(path.join(publicDir, 'index.html')));
-fs.mkdir(generatedDir, { recursive: true }).catch(() => {});
-app.listen(PORT, () => console.log(`Sala de Proyección escuchando en http://localhost:${PORT}`));
+app.get('/api/video/file/:jobId', (req, res) => {
+  const filePath = path.join(generatedDir, `${String(req.params.jobId || '')}.mp4`);
+  return res.sendFile(filePath, (error) => { if (error && !res.headersSent) res.status(error.statusCode || 404).json({ error: 'Vídeo no encontrado.' }); });
+});
+
+app.listen(PORT, () => console.log(`Sala de Proyección API listening on ${PORT}`));
