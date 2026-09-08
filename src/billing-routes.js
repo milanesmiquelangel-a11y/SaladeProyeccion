@@ -15,13 +15,21 @@ function configured(req, res, next) {
 function priceIdFor(planId) {
   return planId === 'creator' ? process.env.STRIPE_PRICE_CREATOR : planId === 'pro' ? process.env.STRIPE_PRICE_PRO : null;
 }
-async function stripeRequest(endpoint, options = {}) {
-  const auth = Buffer.from(`${process.env.STRIPE_SECRET_KEY}:`).toString('base64');
-  const response = await fetch(`https://api.stripe.com/v1/${endpoint}`, { ...options, headers: { Authorization: `Basic ${auth}`, ...(options.headers || {}) } });
-  const data = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(data?.error?.message || `Stripe respondió HTTP ${response.status}.`);
-  return data;
-}
+
+router.get('/status', (_req, res) => {
+  const stripeSecret = Boolean(process.env.STRIPE_SECRET_KEY);
+  const webhook = Boolean(process.env.STRIPE_WEBHOOK_SECRET);
+  const creatorPrice = Boolean(process.env.STRIPE_PRICE_CREATOR);
+  const proPrice = Boolean(process.env.STRIPE_PRICE_PRO);
+  const ready = billingIsConfigured() && webhook && creatorPrice && proPrice;
+  res.json({
+    provider: BILLING_CONFIG.provider,
+    enabled: BILLING_CONFIG.enabled,
+    configured: ready,
+    testMode: Boolean(process.env.STRIPE_SECRET_KEY?.startsWith('sk_test_')),
+    requirements: { secretKey: stripeSecret, webhookSecret: webhook, creatorPriceId: creatorPrice, proPriceId: proPrice }
+  });
+});
 
 router.post('/checkout', configured, async (req, res) => {
   const planId = String(req.body?.plan || '').toLowerCase();
@@ -48,6 +56,14 @@ router.post('/checkout', configured, async (req, res) => {
     return res.status(502).json({ error: error.message || 'No se pudo crear el checkout de Stripe.' });
   }
 });
+
+async function stripeRequest(endpoint, options = {}) {
+  const auth = Buffer.from(`${process.env.STRIPE_SECRET_KEY}:`).toString('base64');
+  const response = await fetch(`https://api.stripe.com/v1/${endpoint}`, { ...options, headers: { Authorization: `Basic ${auth}`, ...(options.headers || {}) } });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(data?.error?.message || `Stripe respondió HTTP ${response.status}.`);
+  return data;
+}
 
 router.post('/portal', configured, async (_req, res) => disabled(res, 'El portal de facturación se habilitará cuando exista un Customer de Stripe asociado a la cuenta.'));
 
