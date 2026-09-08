@@ -4,6 +4,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { randomUUID } from 'node:crypto';
 import billingRouter from './billing-routes.js';
+import { refundGeneration } from './billing-ledger.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const dataDir = path.join(__dirname, 'data');
@@ -36,23 +37,6 @@ function generationCost(req) {
   if (req.path === '/api/video/sequence') return Math.max(1, Math.ceil(Number(body.duration) / 5 || 1)) * highMultiplier;
   return highMultiplier;
 }
-function accountFor(ledger, id) {
-  return ledger.users[id] || {
-    credits: FREE_CREDITS,
-    plan: 'Gratis',
-    totalConsumed: 0,
-    createdAt: Date.now(),
-    nextRechargeAt: Date.now() + FREE_RECHARGE_MS
-  };
-}
-function applyFreeRecharge(account, now = Date.now()) {
-  if (account.plan !== 'Gratis') return false;
-  const next = Number(account.nextRechargeAt || 0);
-  if (!next || now < next) return false;
-  account.credits = Math.min(FREE_CREDITS, Math.max(0, Number(account.credits) || 0) + FREE_CREDITS);
-  account.nextRechargeAt = now + FREE_RECHARGE_MS;
-  return true;
-}
 
 async function billingMiddleware(req, res, next) {
   const id = userId(req);
@@ -77,10 +61,35 @@ async function billingMiddleware(req, res, next) {
   ledger.transactions.push({ id: transactionId, userId: id, type: 'generation', route: req.path, cost, status: 'reserved', createdAt: Date.now() });
   if (ledger.transactions.length > 5000) ledger.transactions = ledger.transactions.slice(-5000);
   await queueWrite(ledger);
+  req.salaBillingUserId = id;
+  req.salaBillingTransactionId = transactionId;
   res.set('X-Sala-Credits', String(account.credits));
   res.set('X-Sala-Cost', String(cost));
   res.set('X-Sala-Transaction-Id', transactionId);
+  res.on('finish', () => {
+    if (res.statusCode >= 500) {
+      refundGeneration(id, transactionId, `http_${res.statusCode}`).catch((error) => console.error('Billing refund error:', error));
+    }
+  });
   next();
+}
+
+function accountFor(ledger, id) {
+  return ledger.users[id] || {
+    credits: FREE_CREDITS,
+    plan: 'Gratis',
+    totalConsumed: 0,
+    createdAt: Date.now(),
+    nextRechargeAt: Date.now() + FREE_RECHARGE_MS
+  };
+}
+function applyFreeRecharge(account, now = Date.now()) {
+  if (account.plan !== 'Gratis') return false;
+  const next = Number(account.nextRechargeAt || 0);
+  if (!next || now < next) return false;
+  account.credits = Math.min(FREE_CREDITS, Math.max(0, Number(account.credits) || 0) + FREE_CREDITS);
+  account.nextRechargeAt = now + FREE_RECHARGE_MS;
+  return true;
 }
 
 express.application.post = function patchedPost(route, ...handlers) {
