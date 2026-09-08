@@ -149,4 +149,58 @@ express.application.listen = function patchedListen(...args) {
   return originalListen.apply(this, args);
 };
 
+// Pixazo generation is asynchronous. Protect status polling from a single stalled network request.
+// Only GET status calls are retried; generation POST requests are never retried to avoid duplicate jobs.
+const nativeFetch = globalThis.fetch.bind(globalThis);
+const PIXAZO_STATUS_HOST = 'gateway.pixazo.ai/v2/requests/status/';
+const PIXAZO_STATUS_TIMEOUT_MS = 30 * 1000;
+const PIXAZO_STATUS_RETRIES = 2;
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+async function fetchWithTimeout(input, init, timeoutMs) {
+  const controller = new AbortController();
+  let timedOut = false;
+  const timer = setTimeout(() => {
+    timedOut = true;
+    controller.abort();
+  }, timeoutMs);
+  const callerSignal = init?.signal;
+  const abortFromCaller = () => controller.abort();
+  if (callerSignal) {
+    if (callerSignal.aborted) controller.abort();
+    else callerSignal.addEventListener('abort', abortFromCaller, { once: true });
+  }
+  try {
+    return await nativeFetch(input, { ...init, signal: controller.signal });
+  } catch (error) {
+    if (callerSignal?.aborted) throw error;
+    if (timedOut) throw Object.assign(new Error('La consulta de estado de Pixazo tardó demasiado.'), { code: 'PIXAZO_STATUS_TIMEOUT' });
+    throw error;
+  } finally {
+    clearTimeout(timer);
+    callerSignal?.removeEventListener('abort', abortFromCaller);
+  }
+}
+
+globalThis.fetch = async (input, init = {}) => {
+  const url = typeof input === 'string' ? input : input?.url || '';
+  const method = String(init.method || (input instanceof Request ? input.method : 'GET')).toUpperCase();
+  const isStatusPoll = method === 'GET' && url.includes(PIXAZO_STATUS_HOST);
+  if (!isStatusPoll) return nativeFetch(input, init);
+
+  let lastError = null;
+  for (let attempt = 0; attempt <= PIXAZO_STATUS_RETRIES; attempt += 1) {
+    try {
+      const response = await fetchWithTimeout(input, init, PIXAZO_STATUS_TIMEOUT_MS);
+      if (response.status !== 429 && response.status < 500) return response;
+      lastError = new Error(`Pixazo devolvió HTTP ${response.status} al consultar el estado.`);
+    } catch (error) {
+      if (init.signal?.aborted) throw error;
+      lastError = error;
+    }
+    if (attempt < PIXAZO_STATUS_RETRIES) await sleep(2000 * (attempt + 1));
+  }
+  throw lastError || new Error('No se pudo consultar el estado de Pixazo.');
+};
+
 await import('./server.js');
