@@ -31,7 +31,7 @@
       if (!response.ok) return;
       const data = await response.json();
       const current = (() => { try { return JSON.parse(localStorage.getItem('salaBilling') || '{}'); } catch { return {}; } })();
-      localStorage.setItem('salaBilling', JSON.stringify({ ...current, credits: Number(data.credits || 0), plan: data.plan || 'Gratis', totalConsumed: Number(data.totalConsumed || 0) }));
+      localStorage.setItem('salaBilling', JSON.stringify({ ...current, credits: Number(data.credits || 0), plan: data.plan || 'Gratis', totalConsumed: Number(data.totalConsumed || 0), nextRechargeAt: data.nextRechargeAt || null, freeRechargeCredits: Number(data.freeRechargeCredits || 3) }));
       window.dispatchEvent(new Event('sala-billing-updated'));
     } catch {}
   }
