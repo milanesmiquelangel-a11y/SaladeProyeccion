@@ -8,9 +8,9 @@ const pool = connectionString
       max: 5,
       idleTimeoutMillis: 30000,
       connectionTimeoutMillis: 5000,
-      ssl: connectionString.includes('render.com') || process.env.DATABASE_SSL === 'true'
-        ? { rejectUnauthorized: false }
-        : undefined
+      ssl: process.env.DATABASE_SSL === 'false'
+        ? undefined
+        : { rejectUnauthorized: false }
     })
   : null;
 
