@@ -2,17 +2,19 @@ import express from 'express';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import billingRouter from './billing-routes.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const dataDir = path.join(__dirname, 'data');
 const ledgerPath = path.join(dataDir, 'billing.json');
 const originalPost = express.application.post;
 const originalGet = express.application.get;
+const originalListen = express.application.listen;
 let writeQueue = Promise.resolve();
 
 async function readLedger() {
   try { return JSON.parse(await fs.readFile(ledgerPath, 'utf8')); }
-  catch { return { users: {}, transactions: [] }; }
+  catch { return { users: {}, transactions: [], payments: [] }; }
 }
 function queueWrite(data) {
   writeQueue = writeQueue.then(async () => {
@@ -79,6 +81,14 @@ express.application.get = function patchedGet(route, ...handlers) {
     });
   }
   return result;
+};
+
+express.application.listen = function patchedListen(...args) {
+  if (!this._salaBillingMounted) {
+    this.use('/api/billing', billingRouter);
+    this._salaBillingMounted = true;
+  }
+  return originalListen.apply(this, args);
 };
 
 await import('./server.js');
