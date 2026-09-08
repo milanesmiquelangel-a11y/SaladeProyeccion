@@ -40,6 +40,7 @@ const templates = {
 let pollTimer;
 let currentRequestId = null;
 let currentSequenceId = null;
+const GENERATION_TIMEOUT_MS = 5 * 60 * 1000;
 
 function readJson(key, fallback) { try { return JSON.parse(localStorage.getItem(key) || JSON.stringify(fallback)); } catch { return fallback; } }
 function writeJson(key, value) { localStorage.setItem(key, JSON.stringify(value)); }
@@ -177,9 +178,26 @@ function finishVideo(url, project, extra = {}) {
   currentRequestId = null; currentSequenceId = null; generateBtn.disabled = false;
 }
 
-async function pollStatus(requestId, project) {
+async function cancelTimedOutGeneration(requestId) {
+  try {
+    const response = await fetch(`/api/video/cancel/${encodeURIComponent(requestId)}`, { method: 'POST' });
+    const data = await response.json().catch(() => ({}));
+    return { ok: response.ok, data };
+  } catch (error) {
+    return { ok: false, data: { error: error.message || 'No se pudo contactar con el servidor.' } };
+  }
+}
+
+async function pollStatus(requestId, project, startedAt = Date.now()) {
   currentRequestId = requestId; clearTimeout(pollTimer);
   try {
+    if (Date.now() - startedAt >= GENERATION_TIMEOUT_MS) {
+      const result = await cancelTimedOutGeneration(requestId);
+      loadingState.classList.add('hidden'); statusText.textContent = 'Tiempo agotado';
+      showError(result.data?.creditRefunded ? 'La generación superó 5 minutos. Fue cancelada y el crédito fue devuelto.' : 'La generación superó 5 minutos. Fue cancelada; el servidor actualizará el saldo automáticamente.');
+      generateBtn.disabled = false;
+      return;
+    }
     const response = await fetch(`/api/video/status/${encodeURIComponent(requestId)}`); const data = await response.json();
     if (!response.ok) throw new Error(data.error || 'No se pudo consultar el estado.');
     const state = String(data.status || data.state || '').toUpperCase();
@@ -190,7 +208,7 @@ async function pollStatus(requestId, project) {
     }
     if (['ERROR','FAILED','CANCELLED'].includes(state)) throw new Error(data.error || `La generación terminó con estado ${state}.`);
     setLoading('Generando clip…', `Estado: ${state || 'EN COLA'}. Comprobando de nuevo en 5 segundos.`);
-    pollTimer = setTimeout(() => pollStatus(requestId, project), 5000);
+    pollTimer = setTimeout(() => pollStatus(requestId, project, startedAt), 5000);
   } catch (error) {
     loadingState.classList.add('hidden'); statusText.textContent = 'Error'; showError(error.message); generateBtn.disabled = false;
   }
@@ -241,6 +259,7 @@ form.addEventListener('submit', async (event) => {
     if (!response.ok) throw new Error(data.error || 'No se pudo iniciar la generación.');
     const requestId = data.request_id || data.requestId;
     if (!requestId) throw new Error('El proveedor no devolvió un identificador de generación.');
+    saveProject({ ...project, requestId, status: 'procesando' });
     await pollStatus(requestId, project);
   } catch (error) {
     loadingState.classList.add('hidden'); statusText.textContent = 'Error'; showError(error.message); generateBtn.disabled = false;
