@@ -29,11 +29,13 @@
   async function refreshInfo() {
     try {
       const response = await nativeFetch('/api/billing/balance', { headers: { 'X-Sala-User-Id': window.salaAccountId || '' } });
-      const data = await response.json();
-      if (!response.ok) throw new Error(data.error || 'No se pudo consultar el saldo.');
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(data.error || `Error del servidor (${response.status}).`);
       const cost = costFor({ duration: Number(durationInput.value), resolution: resolutionInput.value }, Number(durationInput.value) > 5 ? '/api/video/sequence' : '/api/video/generate');
       message.innerHTML = `<strong>Saldo: ${Number(data.credits || 0)} créditos</strong> · Esta generación: <strong>${cost} crédito${cost === 1 ? '' : 's'}</strong><br><span>${Number(data.credits || 0) >= cost ? '✅ Puedes generar.' : `❌ Créditos insuficientes. ${formatCountdown(data.nextRechargeAt)}`}</span>`;
-    } catch { message.textContent = 'No se pudo consultar el saldo.'; }
+    } catch (error) {
+      message.textContent = `⚠️ Saldo no disponible: ${error?.message || 'error desconocido'}`;
+    }
   }
 
   [durationInput, resolutionInput].forEach((input) => input.addEventListener('change', refreshInfo));
@@ -48,8 +50,8 @@
     const cost = costFor(body, url);
     try {
       const response = await nativeFetch('/api/billing/balance', { headers: { 'X-Sala-User-Id': window.salaAccountId || '' } });
-      const data = await response.json();
-      if (!response.ok) return new Response(JSON.stringify({ error: data.error || 'No se pudo consultar el saldo.' }), { status: 400, headers: { 'Content-Type': 'application/json' } });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) return new Response(JSON.stringify({ error: data.error || `No se pudo consultar el saldo (HTTP ${response.status}).` }), { status: 400, headers: { 'Content-Type': 'application/json' } });
       if (Number(data.credits || 0) < cost) {
         const text = `Créditos insuficientes. Esta generación necesita ${cost} crédito${cost === 1 ? '' : 's'} y tienes ${Number(data.credits || 0)}. ${formatCountdown(data.nextRechargeAt)}`;
         message.innerHTML = `<strong>❌ No se puede generar</strong><br>${text}`;
