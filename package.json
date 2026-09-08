@@ -1,13 +1,13 @@
 {
   "name": "sala-de-proyeccion",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "private": true,
   "description": "Backend Node/Express para Sala de Proyección con generación y montaje de vídeo IA.",
   "type": "module",
-  "main": "src/server.js",
+  "main": "src/monetized-entry.js",
   "scripts": {
-    "start": "node src/server.js",
-    "dev": "node --watch src/server.js"
+    "start": "node src/monetized-entry.js",
+    "dev": "node --watch src/monetized-entry.js"
   },
   "engines": {
     "node": ">=18"
