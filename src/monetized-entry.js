@@ -15,7 +15,7 @@ const originalListen = express.application.listen;
 let writeQueue = Promise.resolve();
 const FREE_CREDITS = 3;
 const FREE_RECHARGE_MS = 24 * 60 * 60 * 1000;
-const STALE_GENERATION_MS = 5 * 60 * 1000;
+const STALE_GENERATION_MS = 20 * 60 * 1000;
 
 async function readLedger() {
   try { return JSON.parse(await fs.readFile(ledgerPath, 'utf8')); }
