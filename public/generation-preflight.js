@@ -26,6 +26,17 @@
     return `Próxima recarga: ${new Date(next).toLocaleString('es-ES')} · faltan ${Math.floor(total / 3600)} h ${Math.floor((total % 3600) / 60)} min ${total % 60} s.`;
   }
 
+  async function diagnoseBalanceError(fallbackError) {
+    try {
+      const healthResponse = await nativeFetch('/api/health');
+      const health = await healthResponse.json().catch(() => ({}));
+      const detail = health.billingDatabaseError || health.databaseError || health.billingDatabase || fallbackError?.message;
+      return detail || `Error del servidor (${healthResponse.status}).`;
+    } catch {
+      return fallbackError?.message || 'El servidor no respondió correctamente.';
+    }
+  }
+
   async function refreshInfo() {
     try {
       const response = await nativeFetch('/api/billing/balance', { headers: { 'X-Sala-User-Id': window.salaAccountId || '' } });
@@ -34,7 +45,8 @@
       const cost = costFor({ duration: Number(durationInput.value), resolution: resolutionInput.value }, Number(durationInput.value) > 5 ? '/api/video/sequence' : '/api/video/generate');
       message.innerHTML = `<strong>Saldo: ${Number(data.credits || 0)} créditos</strong> · Esta generación: <strong>${cost} crédito${cost === 1 ? '' : 's'}</strong><br><span>${Number(data.credits || 0) >= cost ? '✅ Puedes generar.' : `❌ Créditos insuficientes. ${formatCountdown(data.nextRechargeAt)}`}</span>`;
     } catch (error) {
-      message.textContent = `⚠️ Saldo no disponible: ${error?.message || 'error desconocido'}`;
+      const detail = await diagnoseBalanceError(error);
+      message.textContent = `⚠️ Saldo no disponible: ${detail}`;
     }
   }
 
