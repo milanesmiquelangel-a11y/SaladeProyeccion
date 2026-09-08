@@ -35,7 +35,8 @@
     document.querySelectorAll('.nav-btn').forEach((button) => button.classList.toggle('active', button.dataset.view === name));
   }
 
-  // Always start a fresh creation with an empty form. Saved projects/history are kept.
+  // Clear only the visible editor. Do NOT dispatch an input event here:
+  // app.js uses input events for autosave, which could recreate an empty draft.
   function clearCreationForm() {
     if (!promptInput) return;
     projectNameInput.value = '';
@@ -45,7 +46,6 @@
     durationInput.value = '5';
     resolutionInput.value = 'standard';
     frameRateInput.value = '24';
-    promptInput.dispatchEvent(new Event('input', { bubbles: true }));
     clearResultForNewProject();
   }
 
