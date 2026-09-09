@@ -60,36 +60,57 @@ async function removeTemporaryUpload(imageUrl) {
 async function submitImageVideo(req, body) {
   const imageUrl = absolutePublicUrl(req, body.imageUrl);
   const [width, height] = imageDimensions(body.aspect, body.resolution);
+
+  // Keep the instruction deliberately motion-only. Describing facial features
+  // again can encourage the model to reinterpret the source instead of
+  // animating it. The uploaded photograph is the sole visual identity source.
+  const motion = String(body.prompt || '').trim();
   const motionPrompt = [
-    String(body.prompt || '').trim(),
-    'Use the supplied reference photograph as the identity and first-frame source.',
-    'Preserve the exact same person throughout the entire clip.',
-    'Do not replace, redesign, reinterpret or regenerate the face.',
-    'Maintain the same facial structure, eyes, eye color, eyebrows, nose, lips, jawline, cheekbones, skin tone, hair color, hairstyle, age and body proportions.',
-    'Only animate the requested motion; keep the person visually identical to the reference image.',
-    'Photorealistic natural motion, stable identity, no facial morphing, no identity drift.'
+    'ANIMATE THE SUPPLIED PHOTOGRAPH ONLY.',
+    'The uploaded photograph is the exact source image and identity reference.',
+    'Do not create, redraw, regenerate, replace or reinterpret the person.',
+    'Preserve the exact face, appearance, clothing, hairstyle, proportions and visual identity from the source image.',
+    'Keep the person visually identical to the source image for the entire clip.',
+    motion || 'Only add extremely subtle natural breathing and a very small natural head movement.',
+    'Use a locked or nearly locked camera. Make only subtle realistic motion.',
+    'Do not introduce new objects, people or scene changes.',
+    'Photorealistic image animation, natural motion, stable composition, no identity drift.'
   ].filter(Boolean).join(' ');
+
   const negative = [
     'different person',
+    'new person',
     'different face',
-    'identity change',
-    'face morphing',
     'face replacement',
-    'facial drift',
+    'face regeneration',
+    'face reinterpretation',
+    'identity change',
+    'identity drift',
+    'facial morphing',
+    'facial redesign',
+    'changed facial features',
     'changed eye color',
     'changed hair color',
     'changed hairstyle',
     'age change',
     'different body proportions',
-    'deformed face',
-    'distorted face',
+    'different clothing',
+    'different background',
+    'new background',
     'duplicate person',
     'extra face',
     'extra limbs',
+    'distorted face',
+    'warped face',
+    'deformed face',
     'warped hands',
+    'camera zoom',
+    'camera rotation',
+    'scene change',
     'cartoon',
     'CGI'
   ].join(', ');
+
   const payload = {
     prompt: motionPrompt.slice(0, 4000),
     image_url: imageUrl,
