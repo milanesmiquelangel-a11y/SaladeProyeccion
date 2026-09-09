@@ -61,7 +61,7 @@ export async function creditAccount(userId, credits, payment = {}) {
     const now = new Date(); const newCredits = Number(row.credits) + credits;
     await client.query('UPDATE sala_accounts SET credits = $2, last_credit_at = $3, plan = COALESCE($4, plan) WHERE user_id = $1', [userId, newCredits, now, payment.plan || null]);
     await client.query(`INSERT INTO sala_transactions (id, user_id, type, cost, credits, status, payment_id, created_at) VALUES ($1, $2, 'credit', $3, $4, 'completed', $5, $6)`, [randomUUID(), userId, -credits, credits, payment.paymentId || null, now]);
-    await client.query(`INSERT INTO sala_payments (id, user_id, provider, event_id, plan, credits, status, created_at) VALUES ($1, $2, 'stripe', $3, $4, 'completed', $5, $6)`, [payment.paymentId || randomUUID(), userId, payment.eventId || null, payment.plan || null, credits, now]);
+    await client.query(`INSERT INTO sala_payments (id, user_id, provider, event_id, plan, credits, status, created_at) VALUES ($1, $2, 'stripe', $3, $4, $5, 'completed', $6)`, [payment.paymentId || randomUUID(), userId, payment.eventId || null, payment.plan || null, credits, now]);
     return { alreadyProcessed: false, credits: newCredits };
   });
 }
