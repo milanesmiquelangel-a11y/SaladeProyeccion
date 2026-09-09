@@ -10,10 +10,11 @@ const publicDir = path.join(__dirname, '..', 'public');
 const freeOutputDir = path.join(publicDir, 'free-image-video');
 const freeTempDir = path.join(publicDir, 'free-image-video', 'tmp');
 
-const WAN_SPACE = process.env.WAN_FREE_SPACE || 'hugging-apps/wan2-2-animate-2-14b';
-const WAN_ENDPOINT = process.env.WAN_FREE_ENDPOINT || '/animate';
-const WAN_MOTION_TEMPLATE = process.env.WAN_MOTION_TEMPLATE ||
-  'https://raw.githubusercontent.com/Wan-Video/Wan2.2/main/examples/wan_animate/animate/video.mp4';
+// Free, authenticated Hugging Face Space using Wan2.1 I2V + CausVid LoRA.
+// It reserves 60s for a 2s / 4-step request, much less than the 218s
+// reservation imposed by the previous Wan2.2 Animate Space.
+const WAN_SPACE = process.env.WAN_FREE_SPACE || 'multimodalart/wan2-1-fast';
+const WAN_ENDPOINT = process.env.WAN_FREE_ENDPOINT || '/generate_video';
 const HF_TOKEN = String(process.env.HF_TOKEN || process.env.HUGGINGFACE_TOKEN || '').trim();
 
 function pickVideoValue(value) {
@@ -60,8 +61,8 @@ async function normalizeReferenceImage(imagePath) {
     '-y', '-loop', '1', '-i', imagePath,
     '-frames:v', '1',
     '-filter_complex',
-    '[0:v]scale=640:360:force_original_aspect_ratio=increase,crop=640:360,gblur=sigma=18[bg];' +
-    '[0:v]scale=640:360:force_original_aspect_ratio=decrease[fg];' +
+    '[0:v]scale=576:320:force_original_aspect_ratio=increase,crop=576:320,gblur=sigma=18[bg];' +
+    '[0:v]scale=576:320:force_original_aspect_ratio=decrease[fg];' +
     '[bg][fg]overlay=(W-w)/2:(H-h)/2,format=yuv420p[out]',
     '-map', '[out]',
     '-q:v', '2',
@@ -73,14 +74,13 @@ async function normalizeReferenceImage(imagePath) {
 
 async function saveVideoResult(value) {
   const videoValue = pickVideoValue(value);
-  if (!videoValue) throw new Error('Wan2.2 terminó sin devolver el vídeo generado.');
+  if (!videoValue) throw new Error('El motor de vídeo terminó sin devolver el vídeo generado.');
 
   await fs.mkdir(freeOutputDir, { recursive: true });
+  await fs.mkdir(freeTempDir, { recursive: true });
   const filename = `wan-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.mp4`;
   const rawDestination = path.join(freeTempDir, filename);
   const destination = path.join(freeOutputDir, filename);
-
-  await fs.mkdir(freeTempDir, { recursive: true });
 
   if (videoValue.startsWith('http://') || videoValue.startsWith('https://')) {
     const response = await fetch(videoValue);
@@ -90,9 +90,12 @@ async function saveVideoResult(value) {
     await fs.copyFile(videoValue, rawDestination);
   }
 
+  // Generate only 2 seconds with the fast I2V model, then slow that continuous
+  // motion to exactly 5 seconds. This avoids a visible repeated scene while
+  // keeping the ZeroGPU reservation small enough for a free account.
   await runFfmpeg([
     '-y', '-i', rawDestination,
-    '-vf', 'setpts=1.4705882353*PTS',
+    '-vf', 'setpts=2.5*PTS',
     '-t', '5',
     '-an',
     '-c:v', 'libx264',
@@ -123,33 +126,27 @@ export async function generateFreeWanImageVideo({ imagePath, prompt }) {
 
     normalizedImagePath = await normalizeReferenceImage(imagePath);
     const referenceImage = handle_file(normalizedImagePath);
-    const drivingVideo = handle_file(WAN_MOTION_TEMPLATE);
 
     const animationPrompt = [
       'Photorealistic adult person animation.',
-      'Use the reference image as the primary source for the person, clothing, body proportions and scene.',
-      'Preserve the visible appearance and composition of the reference; do not invent a new person or redesign the clothing.',
-      'Very subtle natural movement only: gentle breathing, realistic blinking when a face is visible, and a small natural head movement when a head is visible.',
-      'Stable appearance throughout the clip, realistic anatomy, no morphing, no duplicate person, no face distortion, no camera movement.',
+      'Preserve the exact person shown in the reference image, including face, hair, clothing, body proportions and scene.',
+      'Do not create a different person, change clothing, redesign the body or change the background.',
+      'Very subtle natural motion only: gentle breathing, realistic blinking when a face is visible, and a tiny natural head movement when appropriate.',
+      'Stable identity, realistic anatomy, no morphing, no duplicate person, no face distortion, no camera movement.',
       String(prompt || '').trim()
     ].filter(Boolean).join(' ');
 
-    // One 3.4-second / 81-frame segment avoids the expensive second segment.
-    // 320x480 and 5 steps keep the xlarge ZeroGPU reservation near 93 seconds,
-    // far below the previous ~218-second request. The generated segment is
-    // stretched to the app's exact 5-second output after inference.
     const result = await app.predict(WAN_ENDPOINT, [
       referenceImage,
-      drivingVideo,
       animationPrompt.slice(0, 4000),
-      3.4,
       320,
-      480,
-      5,
+      576,
+      'distorted face, identity drift, morphing, extra people, duplicate body parts, deformed hands, cartoon, CGI, low resolution, blurry, pixelated, text, watermark',
+      2,
       1,
-      5,
-      'distorted face, identity drift, morphing, extra people, duplicate body parts, deformed hands, cartoon, CGI, low resolution, blurry, pixelated',
-      0
+      4,
+      42,
+      false
     ]);
 
     const data = Array.isArray(result?.data) ? result.data : result?.data ? [result.data] : [];
@@ -158,11 +155,11 @@ export async function generateFreeWanImageVideo({ imagePath, prompt }) {
 
     return {
       outputUrl,
-      provider: `Wan2.2 Animate (${WAN_SPACE})`,
-      detail: 'Vídeo generado con Wan2.2 Animate-2-14B mediante una referencia 16:9 normalizada y un segmento de movimiento de 3,4 s convertido a un clip final de 5 s.'
+      provider: `Wan2.1 I2V Fast (${WAN_SPACE})`,
+      detail: 'Vídeo generado con Wan2.1 I2V Fast y CausVid en 2 s de movimiento, convertido después a un clip final continuo de 5 s.'
     };
   } catch (error) {
-    throw new Error(`Wan2.2 no pudo generar el vídeo: ${describeError(error)}`);
+    throw new Error(`Wan I2V no pudo generar el vídeo: ${describeError(error)}`);
   } finally {
     if (normalizedImagePath) await fs.rm(normalizedImagePath, { force: true }).catch(() => {});
   }
