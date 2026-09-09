@@ -7,13 +7,11 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const publicDir = path.join(__dirname, '..', 'public');
 const freeOutputDir = path.join(publicDir, 'free-image-video');
 
-// Free Hugging Face ZeroGPU Space running the local Wan2.2-Animate-2-14B
-// pipeline. Unlike the previous community proxy, this Space performs the
-// animation itself and exposes the /animate Gradio endpoint directly.
 const WAN_SPACE = process.env.WAN_FREE_SPACE || 'hugging-apps/wan2-2-animate-2-14b';
 const WAN_ENDPOINT = process.env.WAN_FREE_ENDPOINT || '/animate';
 const WAN_MOTION_TEMPLATE = process.env.WAN_MOTION_TEMPLATE ||
   'https://raw.githubusercontent.com/Wan-Video/Wan2.2/main/examples/wan_animate/animate/video.mp4';
+const HF_TOKEN = String(process.env.HF_TOKEN || process.env.HUGGINGFACE_TOKEN || '').trim();
 
 function pickVideoValue(value) {
   if (!value) return '';
@@ -45,13 +43,9 @@ async function saveVideoResult(value) {
   const filename = `wan-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.mp4`;
   const destination = path.join(freeOutputDir, filename);
 
-  // Gradio can return either a downloaded local filepath or a remote URL.
-  // Handle both so the generated file is always served by Sala de Proyección.
   if (videoValue.startsWith('http://') || videoValue.startsWith('https://')) {
     const response = await fetch(videoValue);
-    if (!response.ok) {
-      throw new Error(`No se pudo descargar el vídeo generado (HTTP ${response.status}).`);
-    }
+    if (!response.ok) throw new Error(`No se pudo descargar el vídeo generado (HTTP ${response.status}).`);
     await fs.writeFile(destination, Buffer.from(await response.arrayBuffer()));
   } else {
     await fs.copyFile(videoValue, destination);
@@ -62,7 +56,11 @@ async function saveVideoResult(value) {
 
 export async function generateFreeWanImageVideo({ imagePath, prompt }) {
   try {
-    const app = await Client.connect(WAN_SPACE);
+    if (!HF_TOKEN) {
+      throw new Error('Hugging Face requiere autenticación para usar la cuota ZeroGPU. Configura HF_TOKEN en Render con un token personal de Hugging Face (permiso Read).');
+    }
+
+    const app = await Client.connect(WAN_SPACE, { token: HF_TOKEN });
     const api = await app.view_api();
     const endpointInfo = api?.named_endpoints?.[WAN_ENDPOINT];
     if (!endpointInfo) {
@@ -80,8 +78,6 @@ export async function generateFreeWanImageVideo({ imagePath, prompt }) {
       String(prompt || '').trim()
     ].filter(Boolean).join(' ');
 
-    // Wan2.2-Animate-2-14B uses the reference image plus a driving video.
-    // max_seconds=5 matches the Sala de Proyección 5-second clip option.
     const result = await app.predict(WAN_ENDPOINT, [
       referenceImage,
       drivingVideo,
