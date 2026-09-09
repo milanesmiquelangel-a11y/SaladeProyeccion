@@ -49,6 +49,14 @@ async function uploadImage(req, res) {
   return res.status(201).json({ url: `/uploads/${filename}` });
 }
 
+async function removeTemporaryUpload(imageUrl) {
+  const relative = String(imageUrl || '');
+  if (!relative.startsWith('/uploads/')) return;
+  const filename = path.basename(relative.slice('/uploads/'.length));
+  if (!filename || filename === '.' || filename === '..') return;
+  await fs.rm(path.join(uploadsDir, filename), { force: true });
+}
+
 async function submitImageVideo(req, body) {
   const imageUrl = absolutePublicUrl(req, body.imageUrl);
   const [width, height] = imageDimensions(body.aspect, body.resolution);
@@ -153,6 +161,7 @@ function mountImageRoutes(app) {
     if (!body.imageUrl || !String(body.imageUrl).startsWith('/uploads/')) return res.status(400).json({ error: 'Selecciona una fotografía antes de generar.' });
     try {
       const requestId = await submitImageVideo(req, body);
+      await removeTemporaryUpload(body.imageUrl);
       const jobId = randomUUID();
       const job = { id: jobId, requestId, status: 'PROCESSING', providerState: 'QUEUED', createdAt: Date.now(), outputUrl: '', detail: 'Enviando la fotografía al motor de vídeo…', userId: req.salaBillingUserId, transactionId: req.salaBillingTransactionId };
       imageJobs.set(jobId, job);
