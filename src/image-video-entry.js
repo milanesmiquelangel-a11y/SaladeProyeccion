@@ -4,6 +4,7 @@ import fs from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { randomUUID } from 'node:crypto';
 import { finalizeGeneration, refundGeneration } from './billing-ledger.js';
+import { generateFreeWanImageVideo } from './free-wan-image-video.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const publicDir = path.join(__dirname, '..', 'public');
@@ -13,6 +14,7 @@ const PIXAZO_IMAGE_VIDEO_URL = process.env.PIXAZO_IMAGE_VIDEO_URL || 'https://ga
 const PIXAZO_STATUS_URL = 'https://gateway.pixazo.ai/v2/requests/status';
 const IMAGE_TIMEOUT_MS = 20 * 60 * 1000;
 const imageJobs = new Map();
+const IMAGE_VIDEO_ENGINE = String(process.env.IMAGE_VIDEO_ENGINE || 'wan-free').toLowerCase();
 
 const nativeListen = express.application.listen;
 
@@ -67,9 +69,6 @@ async function submitImageVideo(req, body) {
     'No face swap, no identity drift, no morphing, no extra people, no duplicate body parts, no deformed hands, no distorted face, no cartoon or CGI appearance.'
   ].join(' ');
 
-  // Seedance 2.5 first/last-frame generation is a real AI video pass.
-  // Supplying the same source image at both ends keeps the requested identity
-  // anchored while the prompt supplies the intermediate human motion.
   const payload = {
     content: [
       { type: 'image_url', image_url: { url: imageUrl } },
@@ -102,7 +101,7 @@ async function submitImageVideo(req, body) {
   return requestId;
 }
 
-async function runImageJob(job) {
+async function runPixazoImageJob(job) {
   const deadline = Date.now() + IMAGE_TIMEOUT_MS;
   try {
     while (Date.now() < deadline) {
@@ -136,34 +135,76 @@ async function runImageJob(job) {
   }
 }
 
+async function runFreeWanImageJob(job) {
+  try {
+    job.providerState = 'QUEUED';
+    job.detail = 'Wan2.2 Animate gratuito está preparando el vídeo…';
+    const result = await generateFreeWanImageVideo({ imagePath: job.imagePath, prompt: job.prompt });
+    if (job.status === 'CANCELLED') return;
+    job.outputUrl = result.outputUrl;
+    job.providerState = 'COMPLETED';
+    job.status = 'COMPLETED';
+    job.detail = result.detail;
+    if (job.userId && job.transactionId) await finalizeGeneration(job.userId, job.transactionId);
+  } catch (error) {
+    if (job.status === 'CANCELLED') return;
+    if (job.userId && job.transactionId) await refundGeneration(job.userId, job.transactionId, 'image_generation_failed');
+    job.status = 'ERROR';
+    job.providerState = 'ERROR';
+    job.detail = `${error.message || 'El motor Wan2.2 no pudo completar el vídeo.'} El crédito fue devuelto.`;
+  } finally {
+    if (job.imagePath) await fs.rm(job.imagePath, { force: true }).catch(() => {});
+  }
+}
+
 function mountImageRoutes(app) {
   if (app._salaImageVideoMounted) return;
   app.post('/api/media/image', express.raw({ type: ['image/jpeg', 'image/png', 'image/webp'], limit: '20mb' }), uploadImage);
   app.post('/api/video/image-to-video', async (req, res) => {
-    if (!PIXAZO_API_KEY) return res.status(503).json({ error: 'PIXAZO_API_KEY no está configurada en el servidor.' });
     const body = req.body || {};
     if (typeof body.prompt !== 'string' || !body.prompt.trim()) return res.status(400).json({ error: 'prompt es obligatorio.' });
     if (!body.imageUrl || !String(body.imageUrl).startsWith('/uploads/')) return res.status(400).json({ error: 'Selecciona una fotografía antes de generar.' });
+
+    const imagePath = path.join(publicDir, String(body.imageUrl).slice('/'.length));
     try {
-      const requestId = await submitImageVideo(req, body);
-      try { await removeTemporaryUpload(body.imageUrl); } catch {}
+      await fs.access(imagePath);
       const jobId = randomUUID();
       const job = {
         id: jobId,
-        requestId,
+        requestId: '',
         status: 'PROCESSING',
         providerState: 'QUEUED',
         createdAt: Date.now(),
         outputUrl: '',
-        detail: 'Enviando la fotografía al motor de vídeo IA…',
+        detail: IMAGE_VIDEO_ENGINE === 'wan-free'
+          ? 'Enviando la fotografía al motor Wan2.2 Animate gratuito…'
+          : 'Enviando la fotografía al motor de vídeo IA…',
         userId: req.salaBillingUserId,
-        transactionId: req.salaBillingTransactionId
+        transactionId: req.salaBillingTransactionId,
+        imagePath,
+        prompt: body.prompt
       };
       imageJobs.set(jobId, job);
-      runImageJob(job).catch((error) => { job.status = 'ERROR'; job.detail = error.message || 'No se pudo completar la generación.'; });
-      return res.status(202).json({ job_id: jobId, request_id: requestId });
+
+      if (IMAGE_VIDEO_ENGINE === 'wan-free') {
+        await removeTemporaryUpload(body.imageUrl);
+        job.imagePath = imagePath;
+        runFreeWanImageJob(job).catch((error) => {
+          job.status = 'ERROR';
+          job.detail = error.message || 'No se pudo completar la generación gratuita.';
+        });
+      } else {
+        const requestId = await submitImageVideo(req, body);
+        job.requestId = requestId;
+        await removeTemporaryUpload(body.imageUrl);
+        runPixazoImageJob(job).catch((error) => {
+          job.status = 'ERROR';
+          job.detail = error.message || 'No se pudo completar la generación.';
+        });
+      }
+      return res.status(202).json({ job_id: jobId, request_id: job.requestId, provider: IMAGE_VIDEO_ENGINE });
     } catch (error) {
-      try { await removeTemporaryUpload(body.imageUrl); } catch {}
+      await removeTemporaryUpload(body.imageUrl).catch(() => {});
       if (req.salaBillingUserId && req.salaBillingTransactionId) await refundGeneration(req.salaBillingUserId, req.salaBillingTransactionId, 'image_generation_submit_failed');
       return res.status(502).json({ error: error.message || 'No se pudo iniciar la generación desde la fotografía.' });
     }
@@ -179,6 +220,7 @@ function mountImageRoutes(app) {
     if (job.status === 'PROCESSING') {
       job.status = 'CANCELLED';
       if (job.userId && job.transactionId) await refundGeneration(job.userId, job.transactionId, 'image_generation_cancelled');
+      if (job.imagePath) await fs.rm(job.imagePath, { force: true }).catch(() => {});
     }
     return res.json({ ok: true, status: job.status, creditRefunded: true });
   });
