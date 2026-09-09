@@ -138,7 +138,7 @@ async function runPixazoImageJob(job) {
 async function runFreeWanImageJob(job) {
   try {
     job.providerState = 'QUEUED';
-    job.detail = 'Wan2.2 Animate gratuito está preparando el vídeo…';
+    job.detail = 'Wan2.1 I2V Fast gratuito está preparando el vídeo…';
     const result = await generateFreeWanImageVideo({ imagePath: job.imagePath, prompt: job.prompt });
     if (job.status === 'CANCELLED') return;
     job.outputUrl = result.outputUrl;
@@ -151,7 +151,7 @@ async function runFreeWanImageJob(job) {
     if (job.userId && job.transactionId) await refundGeneration(job.userId, job.transactionId, 'image_generation_failed');
     job.status = 'ERROR';
     job.providerState = 'ERROR';
-    job.detail = `${error.message || 'El motor Wan2.2 no pudo completar el vídeo.'} El crédito fue devuelto.`;
+    job.detail = `${error.message || 'El motor Wan2.1 I2V Fast no pudo completar el vídeo.'} El crédito fue devuelto.`;
   } finally {
     if (job.imagePath) await fs.rm(job.imagePath, { force: true }).catch(() => {});
   }
@@ -177,7 +177,7 @@ function mountImageRoutes(app) {
         createdAt: Date.now(),
         outputUrl: '',
         detail: IMAGE_VIDEO_ENGINE === 'wan-free'
-          ? 'Enviando la fotografía al motor Wan2.2 Animate gratuito…'
+          ? 'Enviando la fotografía al motor Wan2.1 I2V Fast gratuito…'
           : 'Enviando la fotografía al motor de vídeo IA…',
         userId: req.salaBillingUserId,
         transactionId: req.salaBillingTransactionId,
@@ -187,7 +187,6 @@ function mountImageRoutes(app) {
       imageJobs.set(jobId, job);
 
       if (IMAGE_VIDEO_ENGINE === 'wan-free') {
-        // Keep the uploaded image until Wan2.2 has uploaded it through Gradio.
         runFreeWanImageJob(job).catch((error) => {
           job.status = 'ERROR';
           job.detail = error.message || 'No se pudo completar la generación gratuita.';
