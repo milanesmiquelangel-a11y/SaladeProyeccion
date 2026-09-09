@@ -161,13 +161,22 @@ function mountImageRoutes(app) {
     if (!body.imageUrl || !String(body.imageUrl).startsWith('/uploads/')) return res.status(400).json({ error: 'Selecciona una fotografía antes de generar.' });
     try {
       const requestId = await submitImageVideo(req, body);
-      await removeTemporaryUpload(body.imageUrl);
+      try {
+        await removeTemporaryUpload(body.imageUrl);
+      } catch (cleanupError) {
+        console.warn('No se pudo eliminar la fotografía temporal después de enviarla a Pixazo:', cleanupError?.message || cleanupError);
+      }
       const jobId = randomUUID();
       const job = { id: jobId, requestId, status: 'PROCESSING', providerState: 'QUEUED', createdAt: Date.now(), outputUrl: '', detail: 'Enviando la fotografía al motor de vídeo…', userId: req.salaBillingUserId, transactionId: req.salaBillingTransactionId };
       imageJobs.set(jobId, job);
       runImageJob(job).catch((error) => { job.status = 'ERROR'; job.detail = error.message || 'No se pudo completar la generación.'; });
       return res.status(202).json({ job_id: jobId, request_id: requestId });
     } catch (error) {
+      try {
+        await removeTemporaryUpload(body.imageUrl);
+      } catch (cleanupError) {
+        console.warn('No se pudo eliminar la fotografía temporal tras un envío fallido:', cleanupError?.message || cleanupError);
+      }
       if (req.salaBillingUserId && req.salaBillingTransactionId) await refundGeneration(req.salaBillingUserId, req.salaBillingTransactionId, 'image_generation_submit_failed');
       return res.status(502).json({ error: error.message || 'No se pudo iniciar la generación desde la fotografía.' });
     }
