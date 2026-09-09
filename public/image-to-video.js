@@ -133,7 +133,7 @@
         imageJobId = null;
         return;
       }
-      setLoading('Animando fotografía…', `Estado: ${data.providerState || 'procesando'}. ${data.detail || 'Comprobando de nuevo en 5 segundos.'}`);
+      setLoading('Animando fotografía con Wan2.2…', `Motor gratuito: ${data.providerState || 'procesando'}. ${data.detail || 'La cola puede tardar unos minutos.'}`);
       pollTimer = setTimeout(() => pollImageJob(jobId), 5000);
     } catch (error) {
       setError(error.message || 'No se pudo completar la generación.');
@@ -153,7 +153,7 @@
       await checkBalance(resolutionInput.value === 'high' ? 2 : 1);
       setLoading('Preparando fotografía…', 'Subiendo la imagen de referencia de forma segura.');
       const imageUrl = await uploadPhoto();
-      setLoading('Enviando a LTX…', 'La fotografía se convertirá en un clip de vídeo de 5 segundos.');
+      setLoading('Enviando a Wan2.2 Animate…', 'Motor IA gratuito: conserva la fotografía y transfiere movimiento humano real desde un vídeo de referencia.');
       const response = await fetch('/api/video/image-to-video', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
