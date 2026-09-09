@@ -9,7 +9,10 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const publicDir = path.join(__dirname, '..', 'public');
 const uploadsDir = path.join(publicDir, 'uploads');
 const PIXAZO_API_KEY = process.env.PIXAZO_API_KEY;
-const PIXAZO_IMAGE_VIDEO_URL = 'https://gateway.pixazo.ai/ltx-video/v1/image-to-video';
+// Vidu Q3 Turbo is used for image-to-video because Pixazo exposes it as a
+// dedicated I2V model and its reference-image conditioning is better suited
+// to preserving a photographed person's appearance than the free LTX route.
+const PIXAZO_IMAGE_VIDEO_URL = process.env.PIXAZO_IMAGE_VIDEO_URL || 'https://gateway.pixazo.ai/vidu-q3-turbo/v1/image-to-video';
 const PIXAZO_STATUS_URL = 'https://gateway.pixazo.ai/v2/requests/status';
 const IMAGE_TIMEOUT_MS = 20 * 60 * 1000;
 const imageJobs = new Map();
@@ -59,12 +62,11 @@ async function removeTemporaryUpload(imageUrl) {
 
 async function submitImageVideo(req, body) {
   const imageUrl = absolutePublicUrl(req, body.imageUrl);
-  const [width, height] = imageDimensions(body.aspect, body.resolution);
-
-  // Keep the instruction deliberately motion-only. Describing facial features
-  // again can encourage the model to reinterpret the source instead of
-  // animating it. The uploaded photograph is the sole visual identity source.
   const motion = String(body.prompt || '').trim();
+  const duration = Math.max(1, Math.min(16, Number(body.duration) || 5));
+  const resolution = body.resolution === 'high' ? '1080p' : '720p';
+  const aspectRatio = ['16:9', '9:16', '3:4', '4:3', '1:1'].includes(body.aspect) ? body.aspect : '16:9';
+
   const motionPrompt = [
     'ANIMATE THE SUPPLIED PHOTOGRAPH ONLY.',
     'The uploaded photograph is the exact source image and identity reference.',
@@ -72,60 +74,34 @@ async function submitImageVideo(req, body) {
     'Preserve the exact face, appearance, clothing, hairstyle, proportions and visual identity from the source image.',
     'Keep the person visually identical to the source image for the entire clip.',
     motion || 'Only add extremely subtle natural breathing and a very small natural head movement.',
-    'Use a locked or nearly locked camera. Make only subtle realistic motion.',
+    'Keep the camera nearly locked. Make only subtle realistic motion.',
     'Do not introduce new objects, people or scene changes.',
     'Photorealistic image animation, natural motion, stable composition, no identity drift.'
-  ].filter(Boolean).join(' ');
+  ].join(' ');
 
   const negative = [
-    'different person',
-    'new person',
-    'different face',
-    'face replacement',
-    'face regeneration',
-    'face reinterpretation',
-    'identity change',
-    'identity drift',
-    'facial morphing',
-    'facial redesign',
-    'changed facial features',
-    'changed eye color',
-    'changed hair color',
-    'changed hairstyle',
-    'age change',
-    'different body proportions',
-    'different clothing',
-    'different background',
-    'new background',
-    'duplicate person',
-    'extra face',
-    'extra limbs',
-    'distorted face',
-    'warped face',
-    'deformed face',
-    'warped hands',
-    'camera zoom',
-    'camera rotation',
-    'scene change',
-    'cartoon',
-    'CGI'
+    'different person', 'new person', 'different face', 'face replacement',
+    'face regeneration', 'face reinterpretation', 'identity change', 'identity drift',
+    'facial morphing', 'facial redesign', 'changed facial features', 'changed eye color',
+    'changed hair color', 'changed hairstyle', 'age change', 'different body proportions',
+    'different clothing', 'different background', 'new background', 'duplicate person',
+    'extra face', 'extra limbs', 'distorted face', 'warped face', 'deformed face',
+    'warped hands', 'camera zoom', 'camera rotation', 'scene change', 'cartoon', 'CGI'
   ].join(', ');
 
   const payload = {
-    prompt: motionPrompt.slice(0, 4000),
-    image_url: imageUrl,
-    strength: 1.0,
-    negative,
-    aspect: ['16:9', '9:16', '1:1'].includes(body.aspect) ? body.aspect : '16:9',
-    width,
-    height,
-    num_frames: 121,
-    frame_rate: 24,
-    enhance_prompt: false
+    start_image: imageUrl,
+    prompt: motionPrompt.slice(0, 5000),
+    duration,
+    resolution,
+    aspect_ratio: aspectRatio,
+    audio: false,
+    negative_prompt: negative
   };
+
   const response = await fetch(PIXAZO_IMAGE_VIDEO_URL, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'Ocp-Apim-Subscription-Key': PIXAZO_API_KEY },
+    headers: { 'Content-Type': 'application/json', 'Cache-Control': 'no-cache', 'Ocp-Apim-Subscription-Key': PIXAZO_API_KEY },
     body: JSON.stringify(payload)
   });
   const data = await response.json().catch(() => ({}));
