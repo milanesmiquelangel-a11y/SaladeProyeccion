@@ -7,10 +7,11 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const publicDir = path.join(__dirname, '..', 'public');
 const freeOutputDir = path.join(publicDir, 'free-image-video');
 
-// Public community Space using the open Wan2.2 Animate model.
-// This is intentionally an experimental/free provider: the Space may queue,
-// pause or change its API. No Pixazo balance is used by this provider.
-const WAN_SPACE = process.env.WAN_FREE_SPACE || 'IA7Cast/Wan2.2-Animate';
+// Free/community Hugging Face Space running Wan2.2 Animate.
+// Wan-Animate is specifically designed for character animation from a
+// reference image plus a driving/template video, which is better suited to
+// preserving the person's identity than generic image-to-video.
+const WAN_SPACE = process.env.WAN_FREE_SPACE || 'tddandroid/Wan2.2-Animate';
 const WAN_ENDPOINT = process.env.WAN_FREE_ENDPOINT || '/predict';
 const WAN_MOTION_TEMPLATE = process.env.WAN_MOTION_TEMPLATE ||
   'https://raw.githubusercontent.com/Wan-Video/Wan2.2/main/examples/wan_animate/animate/video.mp4';
@@ -31,9 +32,15 @@ function pickVideoUrl(value) {
   return '';
 }
 
+function describeError(error) {
+  const message = error?.message || String(error || 'Error desconocido');
+  const cause = error?.cause?.message ? ` (${error.cause.message})` : '';
+  return `${message}${cause}`;
+}
+
 async function saveRemoteVideo(value) {
   const remoteUrl = pickVideoUrl(value);
-  if (!remoteUrl) throw new Error('El motor Wan2.2 no devolvió un vídeo.');
+  if (!remoteUrl) throw new Error('Wan2.2 terminó sin devolver una URL de vídeo.');
   if (remoteUrl.startsWith('/')) return remoteUrl;
   const response = await fetch(remoteUrl);
   if (!response.ok) throw new Error(`No se pudo descargar el vídeo generado (HTTP ${response.status}).`);
@@ -45,33 +52,36 @@ async function saveRemoteVideo(value) {
 }
 
 export async function generateFreeWanImageVideo({ imagePath, prompt }) {
-  const app = await Client.connect(WAN_SPACE);
-  const api = await app.view_api();
-  const endpointInfo = api?.named_endpoints?.[WAN_ENDPOINT];
-  if (!endpointInfo) {
-    throw new Error(`El Space Wan2.2 no expone actualmente ${WAN_ENDPOINT}.`);
+  try {
+    const app = await Client.connect(WAN_SPACE);
+    const api = await app.view_api();
+    const endpointInfo = api?.named_endpoints?.[WAN_ENDPOINT];
+    if (!endpointInfo) {
+      throw new Error(`El Space ${WAN_SPACE} no expone actualmente ${WAN_ENDPOINT}.`);
+    }
+
+    const referenceImage = handle_file(imagePath);
+    const drivingVideo = handle_file(WAN_MOTION_TEMPLATE);
+
+    // The public Wan2.2 Animate Space uses exactly these four inputs:
+    // reference image, template/driving video, move/mix mode and quality.
+    // Move mode animates the supplied reference character.
+    const result = await app.predict(WAN_ENDPOINT, [
+      referenceImage,
+      drivingVideo,
+      'wan2.2-animate-move',
+      'wan-std'
+    ]);
+
+    const data = Array.isArray(result?.data) ? result.data : result?.data ? [result.data] : [];
+    const output = data.find((item) => pickVideoUrl(item)) || data[0];
+    const outputUrl = await saveRemoteVideo(output);
+    return {
+      outputUrl,
+      provider: `Wan2.2 Animate (${WAN_SPACE})`,
+      detail: 'Vídeo generado con Wan2.2 Animate en modo Move usando la fotografía como personaje de referencia.'
+    };
+  } catch (error) {
+    throw new Error(`Wan2.2 no pudo generar el vídeo: ${describeError(error)}`);
   }
-
-  const referenceImage = handle_file(imagePath);
-  const drivingVideo = handle_file(WAN_MOTION_TEMPLATE);
-
-  // IA7Cast/Wan2.2-Animate currently exposes:
-  // reference image, template video, animation mode and inference quality.
-  // Move mode animates the supplied reference character instead of replacing
-  // the performer. Standard keeps the free test lighter than Pro.
-  const result = await app.predict(WAN_ENDPOINT, [
-    referenceImage,
-    drivingVideo,
-    'wan2.2-animate-move',
-    'wan-std'
-  ]);
-
-  const data = Array.isArray(result?.data) ? result.data : result?.data ? [result.data] : [];
-  const output = data.find((item) => pickVideoUrl(item)) || data[0];
-  const outputUrl = await saveRemoteVideo(output);
-  return {
-    outputUrl,
-    provider: 'Wan2.2 Animate (free community Space)',
-    detail: 'Vídeo generado con Wan2.2 Animate usando una imagen de referencia y un vídeo de movimiento.'
-  };
 }
