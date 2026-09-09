@@ -13,7 +13,7 @@
     "node": ">=18"
   },
   "dependencies": {
-    "@gradio/client": "^1.15.0",
+    "@gradio/client": "^2.5.1",
     "cors": "^2.8.5",
     "dotenv": "^16.4.7",
     "express": "^4.21.2",
