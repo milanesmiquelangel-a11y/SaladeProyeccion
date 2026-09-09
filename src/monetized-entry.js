@@ -3,6 +3,7 @@ import './image-video-entry.js';
 import billingRouter from './billing-routes.js';
 import { dbQuery, databaseConfigured } from './database.js';
 import { getAccount, reserveGeneration, refundGeneration, recoverStaleGenerationReservations } from './billing-ledger.js';
+import { sequencePostHandler, sequenceStatusHandler, sequenceCancelHandler } from './sequence-continuity.js';
 
 const originalPost = express.application.post;
 const originalGet = express.application.get;
@@ -48,11 +49,14 @@ async function billingMiddleware(req, res, next) {
 }
 
 express.application.post = function patchedPost(route, ...handlers) {
-  if (route === '/api/video/generate' || route === '/api/video/sequence' || route === '/api/video/image-to-video') handlers.unshift(billingMiddleware);
+  if (route === '/api/video/sequence') return originalPost.call(this, route, billingMiddleware, sequencePostHandler);
+  if (route === '/api/video/generate' || route === '/api/video/image-to-video') handlers.unshift(billingMiddleware);
+  if (route === '/api/video/sequence/:jobId/cancel') return originalPost.call(this, route, sequenceCancelHandler);
   return originalPost.call(this, route, ...handlers);
 };
 
 express.application.get = function patchedGet(route, ...handlers) {
+  if (route === '/api/video/sequence/:jobId') return originalGet.call(this, route, sequenceStatusHandler);
   const result = originalGet.call(this, route, ...handlers);
   if (route === '/api/health') {
     originalGet.call(this, '/api/billing/balance', async (req, res) => {
