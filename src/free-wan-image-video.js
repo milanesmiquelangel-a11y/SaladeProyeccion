@@ -52,10 +52,6 @@ function runFfmpeg(args) {
   });
 }
 
-// Wan-Animate-2 follows the requested canvas, but portrait references can make
-// the result portrait or heavily distorted when the app is configured for 16:9.
-// Prepare a 16:9 reference first: preserve the complete source image in the
-// center and use a blurred enlargement of that same image as the side/back fill.
 async function normalizeReferenceImage(imagePath) {
   await fs.mkdir(freeTempDir, { recursive: true });
   const output = path.join(freeTempDir, `ref-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.jpg`);
@@ -94,10 +90,6 @@ async function saveVideoResult(value) {
     await fs.copyFile(videoValue, rawDestination);
   }
 
-  // The distilled Space generates one 81-frame segment (~3.4 s). Slow that
-  // segment to exactly 5 seconds rather than inventing a second, discontinuous
-  // generation. This preserves every generated frame and keeps the movement
-  // continuous while satisfying Sala de Proyección's 5-second clip contract.
   await runFfmpeg([
     '-y', '-i', rawDestination,
     '-vf', 'setpts=1.4705882353*PTS',
@@ -142,19 +134,18 @@ export async function generateFreeWanImageVideo({ imagePath, prompt }) {
       String(prompt || '').trim()
     ].filter(Boolean).join(' ');
 
-    // The Space processes animation in ~3.4-second / 81-frame segments. One
-    // segment is the most reliable free ZeroGPU request; saveVideoResult then
-    // time-stretches it to the app's exact 5-second output duration.
-    // 640x360 is substantially sharper than the previous 576x320 test while
-    // remaining within the authenticated ZeroGPU duration estimate.
+    // One 3.4-second / 81-frame segment avoids the expensive second segment.
+    // 320x480 and 5 steps keep the xlarge ZeroGPU reservation near 93 seconds,
+    // far below the previous ~218-second request. The generated segment is
+    // stretched to the app's exact 5-second output after inference.
     const result = await app.predict(WAN_ENDPOINT, [
       referenceImage,
       drivingVideo,
       animationPrompt.slice(0, 4000),
       3.4,
-      360,
-      640,
-      6,
+      320,
+      480,
+      5,
       1,
       5,
       'distorted face, identity drift, morphing, extra people, duplicate body parts, deformed hands, cartoon, CGI, low resolution, blurry, pixelated',
