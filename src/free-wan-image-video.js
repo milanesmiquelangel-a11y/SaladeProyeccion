@@ -78,13 +78,18 @@ export async function generateFreeWanImageVideo({ imagePath, prompt }) {
       String(prompt || '').trim()
     ].filter(Boolean).join(' ');
 
+    // The Hugging Face Space uses ZeroGPU xlarge, so its requested duration is
+    // quota-weighted by 2x. The previous 480x640 request estimated ~856s and
+    // was rejected before inference. Keep the 5-second clip and 16:9 landscape
+    // format, but use the Space's lowest practical 16:9 resolution so the
+    // estimated request stays within the free-account ZeroGPU limit.
     const result = await app.predict(WAN_ENDPOINT, [
       referenceImage,
       drivingVideo,
       animationPrompt.slice(0, 4000),
       5,
-      480,
-      640,
+      320,
+      576,
       6,
       1,
       5,
