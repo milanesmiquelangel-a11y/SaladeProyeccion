@@ -1,29 +1,29 @@
 import { randomUUID } from 'node:crypto';
 import { dbQuery, databaseConfigured, withTransaction } from './database.js';
 
-const FREE_CREDITS = 3;
-const FREE_RECHARGE_MS = 24 * 60 * 60 * 1000;
+const FREE_CREDITS = 30;
 
 export { databaseConfigured };
 
 function accountFromRow(row) {
-  return { credits: Number(row.credits || 0), plan: row.plan || 'Gratis', totalConsumed: Number(row.total_consumed || 0), createdAt: new Date(row.created_at).getTime(), nextRechargeAt: row.next_recharge_at ? new Date(row.next_recharge_at).getTime() : null };
-}
-
-function applyFreeRecharge(row, now = Date.now()) {
-  if (row.plan !== 'Gratis') return false;
-  const next = row.next_recharge_at ? new Date(row.next_recharge_at).getTime() : 0;
-  if (!next || now < next) return false;
-  row.credits = Math.min(FREE_CREDITS, Math.max(0, Number(row.credits) || 0) + FREE_CREDITS);
-  row.next_recharge_at = new Date(now + FREE_RECHARGE_MS);
-  return true;
+  return { credits: Number(row.credits || 0), plan: row.plan || 'Gratis', totalConsumed: Number(row.total_consumed || 0), createdAt: new Date(row.created_at).getTime(), nextRechargeAt: null };
 }
 
 async function ensureAccount(client, userId) {
   const existing = await client.query('SELECT * FROM sala_accounts WHERE user_id = $1 FOR UPDATE', [userId]);
-  if (existing.rowCount) return existing.rows[0];
+  if (existing.rowCount) {
+    const row = existing.rows[0];
+    // Migrate old free accounts from the previous 24-hour recharge model.
+    // The presence of next_recharge_at marks an account created under that model.
+    if (row.plan === 'Gratis' && row.next_recharge_at) {
+      row.credits = FREE_CREDITS;
+      row.next_recharge_at = null;
+      await client.query('UPDATE sala_accounts SET credits = $2, next_recharge_at = NULL WHERE user_id = $1', [userId, FREE_CREDITS]);
+    }
+    return row;
+  }
   const now = new Date();
-  const inserted = await client.query(`INSERT INTO sala_accounts (user_id, credits, plan, total_consumed, created_at, next_recharge_at) VALUES ($1, $2, 'Gratis', 0, $3, $4) RETURNING *`, [userId, FREE_CREDITS, now, new Date(now.getTime() + FREE_RECHARGE_MS)]);
+  const inserted = await client.query(`INSERT INTO sala_accounts (user_id, credits, plan, total_consumed, created_at, next_recharge_at) VALUES ($1, $2, 'Gratis', 0, $3, NULL) RETURNING *`, [userId, FREE_CREDITS, now]);
   return inserted.rows[0];
 }
 
@@ -31,7 +31,6 @@ export async function getAccount(userId) {
   if (!userId) throw new Error('Cuenta no identificada.');
   return withTransaction(async (client) => {
     const row = await ensureAccount(client, userId);
-    if (applyFreeRecharge(row)) await client.query('UPDATE sala_accounts SET credits = $2, next_recharge_at = $3 WHERE user_id = $1', [userId, row.credits, row.next_recharge_at]);
     return accountFromRow(row);
   });
 }
@@ -41,10 +40,9 @@ export async function reserveGeneration(userId, cost, route) {
   await recoverStaleGenerationReservations(userId);
   return withTransaction(async (client) => {
     const row = await ensureAccount(client, userId);
-    if (applyFreeRecharge(row)) await client.query('UPDATE sala_accounts SET credits = $2, next_recharge_at = $3 WHERE user_id = $1', [userId, row.credits, row.next_recharge_at]);
     if (Number(row.credits) < cost) {
       const error = new Error(`Créditos insuficientes. Esta generación necesita ${cost} crédito${cost === 1 ? '' : 's'} y tienes ${row.credits}.`);
-      error.code = 'INSUFFICIENT_CREDITS'; error.credits = Number(row.credits); error.required = cost; error.nextRechargeAt = row.next_recharge_at ? new Date(row.next_recharge_at).getTime() : null;
+      error.code = 'INSUFFICIENT_CREDITS'; error.credits = Number(row.credits); error.required = cost; error.nextRechargeAt = null;
       throw error;
     }
     const transactionId = randomUUID();
@@ -63,7 +61,7 @@ export async function creditAccount(userId, credits, payment = {}) {
     const now = new Date(); const newCredits = Number(row.credits) + credits;
     await client.query('UPDATE sala_accounts SET credits = $2, last_credit_at = $3, plan = COALESCE($4, plan) WHERE user_id = $1', [userId, newCredits, now, payment.plan || null]);
     await client.query(`INSERT INTO sala_transactions (id, user_id, type, cost, credits, status, payment_id, created_at) VALUES ($1, $2, 'credit', $3, $4, 'completed', $5, $6)`, [randomUUID(), userId, -credits, credits, payment.paymentId || null, now]);
-    await client.query(`INSERT INTO sala_payments (id, user_id, provider, event_id, plan, credits, status, created_at) VALUES ($1, $2, 'stripe', $3, $4, $5, 'completed', $6)`, [payment.paymentId || randomUUID(), userId, payment.eventId || null, payment.plan || null, credits, now]);
+    await client.query(`INSERT INTO sala_payments (id, user_id, provider, event_id, plan, credits, status, created_at) VALUES ($1, $2, 'stripe', $3, $4, 'completed', $5, $6)`, [payment.paymentId || randomUUID(), userId, payment.eventId || null, payment.plan || null, credits, now]);
     return { alreadyProcessed: false, credits: newCredits };
   });
 }
