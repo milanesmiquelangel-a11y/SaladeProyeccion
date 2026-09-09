@@ -187,8 +187,7 @@ function mountImageRoutes(app) {
       imageJobs.set(jobId, job);
 
       if (IMAGE_VIDEO_ENGINE === 'wan-free') {
-        await removeTemporaryUpload(body.imageUrl);
-        job.imagePath = imagePath;
+        // Keep the uploaded image until Wan2.2 has uploaded it through Gradio.
         runFreeWanImageJob(job).catch((error) => {
           job.status = 'ERROR';
           job.detail = error.message || 'No se pudo completar la generación gratuita.';
