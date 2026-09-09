@@ -9,10 +9,10 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const publicDir = path.join(__dirname, '..', 'public');
 const uploadsDir = path.join(publicDir, 'uploads');
 const PIXAZO_API_KEY = process.env.PIXAZO_API_KEY;
-// Vidu Q3 Turbo is used for image-to-video because Pixazo exposes it as a
-// dedicated I2V model and its reference-image conditioning is better suited
-// to preserving a photographed person's appearance than the free LTX route.
-const PIXAZO_IMAGE_VIDEO_URL = process.env.PIXAZO_IMAGE_VIDEO_URL || 'https://gateway.pixazo.ai/vidu-q3-turbo/v1/image-to-video';
+// Use Vidu Q3 Turbo Reference-to-Video with the same photograph as both
+// start and end reference. This gives the model an explicit identity anchor
+// for the whole clip instead of relying only on first-frame image-to-video.
+const PIXAZO_IMAGE_VIDEO_URL = process.env.PIXAZO_IMAGE_VIDEO_URL || 'https://gateway.pixazo.ai/vidu-q3-turbo/v1/reference-to-video';
 const PIXAZO_STATUS_URL = 'https://gateway.pixazo.ai/v2/requests/status';
 const IMAGE_TIMEOUT_MS = 20 * 60 * 1000;
 const imageJobs = new Map();
@@ -65,38 +65,27 @@ async function submitImageVideo(req, body) {
   const motion = String(body.prompt || '').trim();
   const duration = Math.max(1, Math.min(16, Number(body.duration) || 5));
   const resolution = body.resolution === 'high' ? '1080p' : '720p';
-  const aspectRatio = ['16:9', '9:16', '3:4', '4:3', '1:1'].includes(body.aspect) ? body.aspect : '16:9';
 
   const motionPrompt = [
-    'ANIMATE THE SUPPLIED PHOTOGRAPH ONLY.',
-    'The uploaded photograph is the exact source image and identity reference.',
+    'Animate the supplied photograph only.',
+    'Use the supplied photograph as the exact identity reference.',
+    'The start and end reference images are intentionally identical.',
+    'Keep the same person, exact face, appearance, clothing, hairstyle, proportions and visual identity throughout the entire clip.',
     'Do not create, redraw, regenerate, replace or reinterpret the person.',
-    'Preserve the exact face, appearance, clothing, hairstyle, proportions and visual identity from the source image.',
-    'Keep the person visually identical to the source image for the entire clip.',
+    'Do not change facial structure, eyes, eyebrows, nose, lips, jawline, skin tone, hair, age or body proportions.',
     motion || 'Only add extremely subtle natural breathing and a very small natural head movement.',
-    'Keep the camera nearly locked. Make only subtle realistic motion.',
-    'Do not introduce new objects, people or scene changes.',
-    'Photorealistic image animation, natural motion, stable composition, no identity drift.'
+    'Keep the camera nearly locked and the composition stable.',
+    'Return naturally toward the exact source appearance by the end of the clip.',
+    'Photorealistic, natural motion, stable identity, no scene changes.'
   ].join(' ');
-
-  const negative = [
-    'different person', 'new person', 'different face', 'face replacement',
-    'face regeneration', 'face reinterpretation', 'identity change', 'identity drift',
-    'facial morphing', 'facial redesign', 'changed facial features', 'changed eye color',
-    'changed hair color', 'changed hairstyle', 'age change', 'different body proportions',
-    'different clothing', 'different background', 'new background', 'duplicate person',
-    'extra face', 'extra limbs', 'distorted face', 'warped face', 'deformed face',
-    'warped hands', 'camera zoom', 'camera rotation', 'scene change', 'cartoon', 'CGI'
-  ].join(', ');
 
   const payload = {
     start_image: imageUrl,
+    end_image: imageUrl,
     prompt: motionPrompt.slice(0, 5000),
     duration,
     resolution,
-    aspect_ratio: aspectRatio,
-    audio: false,
-    negative_prompt: negative
+    audio: false
   };
 
   const response = await fetch(PIXAZO_IMAGE_VIDEO_URL, {
@@ -164,7 +153,7 @@ function mountImageRoutes(app) {
         console.warn('No se pudo eliminar la fotografía temporal después de enviarla a Pixazo:', cleanupError?.message || cleanupError);
       }
       const jobId = randomUUID();
-      const job = { id: jobId, requestId, status: 'PROCESSING', providerState: 'QUEUED', createdAt: Date.now(), outputUrl: '', detail: 'Enviando la fotografía al motor de vídeo…', userId: req.salaBillingUserId, transactionId: req.salaBillingTransactionId };
+      const job = { id: jobId, requestId, status: 'PROCESSING', providerState: 'QUEUED', createdAt: Date.now(), outputUrl: '', detail: 'Enviando la fotografía al motor de referencia…', userId: req.salaBillingUserId, transactionId: req.salaBillingTransactionId };
       imageJobs.set(jobId, job);
       runImageJob(job).catch((error) => { job.status = 'ERROR'; job.detail = error.message || 'No se pudo completar la generación.'; });
       return res.status(202).json({ job_id: jobId, request_id: requestId });
