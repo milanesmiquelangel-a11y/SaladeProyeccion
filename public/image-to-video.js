@@ -8,6 +8,9 @@
   const cancelBtn = document.querySelector('#cancelBtn');
   const promptInput = document.querySelector('#prompt');
   const projectNameInput = document.querySelector('#projectName');
+  const audioTextInput = document.querySelector('#audioText');
+  const audioLanguageInput = document.querySelector('#audioLanguage');
+  const audioPreviewBtn = document.querySelector('#audioPreviewBtn');
   const loadingState = document.querySelector('#loadingState');
   const loadingTitle = document.querySelector('#loadingTitle');
   const loadingDetail = document.querySelector('#loadingDetail');
@@ -57,28 +60,29 @@
     previewUrl = '';
     imagePreview.innerHTML = '';
     imagePreview.classList.add('hidden');
-    if (!selectedFile) {
-      setImageMode(false);
-      return;
-    }
+    if (!selectedFile) { setImageMode(false); return; }
     if (!['image/jpeg', 'image/png', 'image/webp'].includes(selectedFile.type)) {
-      imageInput.value = '';
-      selectedFile = null;
-      setImageMode(false);
-      setError('Selecciona una fotografía JPG, PNG o WEBP.');
-      return;
+      imageInput.value = ''; selectedFile = null; setImageMode(false); setError('Selecciona una fotografía JPG, PNG o WEBP.'); return;
     }
     if (selectedFile.size > 20 * 1024 * 1024) {
-      imageInput.value = '';
-      selectedFile = null;
-      setImageMode(false);
-      setError('La fotografía no puede superar 20 MB.');
-      return;
+      imageInput.value = ''; selectedFile = null; setImageMode(false); setError('La fotografía no puede superar 20 MB.'); return;
     }
     previewUrl = URL.createObjectURL(selectedFile);
     imagePreview.innerHTML = `<img src="${previewUrl}" alt="Vista previa de la fotografía" /><span>Fotografía seleccionada · se animará durante 5 segundos</span>`;
     imagePreview.classList.remove('hidden');
     setImageMode(true);
+  });
+
+  audioPreviewBtn?.addEventListener('click', () => {
+    const text = String(audioTextInput?.value || '').trim();
+    if (!text) return setError('Escribe primero el texto de la narración.');
+    if (!('speechSynthesis' in window)) return setError('La vista previa de voz no está disponible en este navegador.');
+    window.speechSynthesis.cancel();
+    const utterance = new SpeechSynthesisUtterance(text);
+    utterance.lang = audioLanguageInput?.value || 'en';
+    utterance.rate = 1;
+    utterance.pitch = 1;
+    window.speechSynthesis.speak(utterance);
   });
 
   async function checkBalance(cost) {
@@ -99,7 +103,7 @@
     try {
       const key = 'salaHistory';
       const items = JSON.parse(localStorage.getItem(key) || '[]');
-      items.unshift({ name: projectNameInput.value.trim() || 'Vídeo desde fotografía', prompt: promptInput.value.trim(), aspect: document.querySelector('#aspect')?.value || '16:9', duration: 5, date: Date.now(), status: 'completado', url });
+      items.unshift({ name: projectNameInput.value.trim() || 'Vídeo desde fotografía', prompt: promptInput.value.trim(), audioText: audioTextInput?.value.trim() || '', audioLanguage: audioLanguageInput?.value || 'en', aspect: document.querySelector('#aspect')?.value || '16:9', duration: 5, date: Date.now(), status: 'completado', url });
       localStorage.setItem(key, JSON.stringify(items.slice(0, 20)));
     } catch {}
   }
@@ -126,19 +130,11 @@
       }
       if (data.status === 'ERROR') throw new Error(data.detail || 'No se pudo generar el vídeo desde la fotografía.');
       if (data.status === 'CANCELLED') {
-        loadingState.classList.add('hidden');
-        statusText.textContent = 'Cancelado';
-        generateBtn.disabled = false;
-        cancelBtn.disabled = true;
-        imageJobId = null;
-        return;
+        loadingState.classList.add('hidden'); statusText.textContent = 'Cancelado'; generateBtn.disabled = false; cancelBtn.disabled = true; imageJobId = null; return;
       }
-      setLoading('Animando fotografía con Wan2.2…', `Motor gratuito: ${data.providerState || 'procesando'}. ${data.detail || 'La cola puede tardar unos minutos.'}`);
+      setLoading(audioTextInput?.value.trim() ? 'Generando vídeo + narración…' : 'Animando fotografía con Wan2.1 I2V Fast…', `${data.providerState || 'procesando'}. ${data.detail || 'La cola puede tardar unos minutos.'}`);
       pollTimer = setTimeout(() => pollImageJob(jobId), 5000);
-    } catch (error) {
-      setError(error.message || 'No se pudo completar la generación.');
-      imageJobId = null;
-    }
+    } catch (error) { setError(error.message || 'No se pudo completar la generación.'); imageJobId = null; }
   }
 
   form.addEventListener('submit', async (event) => {
@@ -153,33 +149,23 @@
       await checkBalance(resolutionInput.value === 'high' ? 2 : 1);
       setLoading('Preparando fotografía…', 'Subiendo la imagen de referencia de forma segura.');
       const imageUrl = await uploadPhoto();
-      setLoading('Enviando a Wan2.2 Animate…', 'Motor IA gratuito: conserva la fotografía y transfiere movimiento humano real desde un vídeo de referencia.');
+      const audioText = String(audioTextInput?.value || '').trim();
+      const audioLanguage = audioLanguageInput?.value || 'en';
+      setLoading(audioText ? 'Preparando vídeo y narración…' : 'Enviando a Wan2.1 I2V Fast…', audioText ? `La fotografía se animará y la voz se generará en ${audioLanguage}.` : 'Motor IA gratuito: movimiento humano real desde la fotografía.');
       const response = await fetch('/api/video/image-to-video', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ prompt: promptInput.value.trim(), imageUrl, aspect: document.querySelector('#aspect')?.value || '16:9', resolution: resolutionInput.value })
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ prompt: promptInput.value.trim(), imageUrl, aspect: document.querySelector('#aspect')?.value || '16:9', resolution: resolutionInput.value, audioText, audioLanguage })
       });
       const data = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(data.error || 'No se pudo iniciar el vídeo desde la fotografía.');
       await pollImageJob(data.job_id);
-    } catch (error) {
-      setError(error.message || 'No se pudo generar el vídeo desde la fotografía.');
-    }
+    } catch (error) { setError(error.message || 'No se pudo generar el vídeo desde la fotografía.'); }
   }, true);
 
   cancelBtn.addEventListener('click', async (event) => {
     if (!imageJobId) return;
-    event.preventDefault();
-    event.stopImmediatePropagation();
-    clearTimeout(pollTimer);
-    try {
-      await fetch(`/api/video/image-to-video/${encodeURIComponent(imageJobId)}/cancel`, { method: 'POST' });
-    } finally {
-      imageJobId = null;
-      loadingState.classList.add('hidden');
-      statusText.textContent = 'Cancelado';
-      generateBtn.disabled = false;
-      cancelBtn.disabled = true;
-    }
+    event.preventDefault(); event.stopImmediatePropagation(); clearTimeout(pollTimer);
+    try { await fetch(`/api/video/image-to-video/${encodeURIComponent(imageJobId)}/cancel`, { method: 'POST' }); }
+    finally { imageJobId = null; loadingState.classList.add('hidden'); statusText.textContent = 'Cancelado'; generateBtn.disabled = false; cancelBtn.disabled = true; }
   }, true);
 })();
