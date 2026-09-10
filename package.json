@@ -1,6 +1,6 @@
 {
   "name": "sala-de-proyeccion",
-  "version": "0.5.0",
+  "version": "0.5.1",
   "private": true,
   "description": "Backend Node/Express para Sala de Proyección con generación y montaje de vídeo IA.",
   "type": "module",
@@ -14,6 +14,7 @@
   },
   "dependencies": {
     "@gradio/client": "^2.5.1",
+    "@sefinek/google-tts-api": "^2.1.15",
     "cors": "^2.8.5",
     "dotenv": "^16.4.7",
     "express": "^4.21.2",
