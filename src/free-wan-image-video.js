@@ -4,6 +4,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawn } from 'node:child_process';
 import ffmpegPath from 'ffmpeg-static';
+import { generateNarration, muxNarrationIntoVideo, cleanupNarration } from './audio-narration.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const publicDir = path.join(__dirname, '..', 'public');
@@ -27,9 +28,7 @@ function pickVideoValue(value) {
     }
     return '';
   }
-  if (typeof value === 'object') {
-    return value.url || value.path || value.video?.url || value.video?.path || '';
-  }
+  if (typeof value === 'object') return value.url || value.path || value.video?.url || value.video?.path || '';
   return '';
 }
 
@@ -46,17 +45,13 @@ function runFfmpeg(args) {
     let stderr = '';
     child.stderr.on('data', (chunk) => { stderr += chunk.toString(); });
     child.on('error', reject);
-    child.on('close', (code) => {
-      if (code === 0) resolve();
-      else reject(new Error(`FFmpeg terminó con código ${code}: ${stderr.slice(-800)}`));
-    });
+    child.on('close', (code) => code === 0 ? resolve() : reject(new Error(`FFmpeg terminó con código ${code}: ${stderr.slice(-800)}`)));
   });
 }
 
 async function normalizeReferenceImage(imagePath) {
   await fs.mkdir(freeTempDir, { recursive: true });
   const output = path.join(freeTempDir, `ref-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.jpg`);
-
   await runFfmpeg([
     '-y', '-loop', '1', '-i', imagePath,
     '-frames:v', '1',
@@ -64,15 +59,12 @@ async function normalizeReferenceImage(imagePath) {
     '[0:v]scale=576:320:force_original_aspect_ratio=increase,crop=576:320,gblur=sigma=18[bg];' +
     '[0:v]scale=576:320:force_original_aspect_ratio=decrease[fg];' +
     '[bg][fg]overlay=(W-w)/2:(H-h)/2,format=yuv420p[out]',
-    '-map', '[out]',
-    '-q:v', '2',
-    output
+    '-map', '[out]', '-q:v', '2', output
   ]);
-
   return output;
 }
 
-async function saveVideoResult(value) {
+async function saveVideoResult(value, audioText = '', audioLanguage = 'en') {
   const videoValue = pickVideoValue(value);
   if (!videoValue) throw new Error('El motor de vídeo terminó sin devolver el vídeo generado.');
 
@@ -95,38 +87,40 @@ async function saveVideoResult(value) {
   // keeping the ZeroGPU reservation small enough for a free account.
   await runFfmpeg([
     '-y', '-i', rawDestination,
-    '-vf', 'setpts=2.5*PTS',
-    '-t', '5',
-    '-an',
-    '-c:v', 'libx264',
-    '-preset', 'veryfast',
-    '-crf', '18',
-    '-pix_fmt', 'yuv420p',
-    '-movflags', '+faststart',
-    destination
+    '-vf', 'setpts=2.5*PTS', '-t', '5', '-an',
+    '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '18',
+    '-pix_fmt', 'yuv420p', '-movflags', '+faststart', destination
   ]);
-
   await fs.rm(rawDestination, { force: true }).catch(() => {});
+
+  let narrationPath = '';
+  try {
+    if (String(audioText || '').trim()) {
+      narrationPath = await generateNarration(audioText, audioLanguage);
+      const narratedDestination = path.join(freeOutputDir, `wan-audio-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.mp4`);
+      await muxNarrationIntoVideo(destination, narrationPath, narratedDestination);
+      await fs.rm(destination, { force: true }).catch(() => {});
+      await fs.rename(narratedDestination, destination);
+    }
+  } finally {
+    await cleanupNarration(narrationPath);
+  }
+
   return `/free-image-video/${filename}`;
 }
 
-export async function generateFreeWanImageVideo({ imagePath, prompt }) {
+export async function generateFreeWanImageVideo({ imagePath, prompt, audioText = '', audioLanguage = 'en' }) {
   let normalizedImagePath = '';
   try {
-    if (!HF_TOKEN) {
-      throw new Error('Hugging Face requiere autenticación para usar la cuota ZeroGPU. Configura HF_TOKEN en Render con un token personal de Hugging Face (permiso Read).');
-    }
+    if (!HF_TOKEN) throw new Error('Hugging Face requiere autenticación para usar la cuota ZeroGPU. Configura HF_TOKEN en Render con un token personal de Hugging Face (permiso Read).');
 
     const app = await Client.connect(WAN_SPACE, { token: HF_TOKEN });
     const api = await app.view_api();
     const endpointInfo = api?.named_endpoints?.[WAN_ENDPOINT];
-    if (!endpointInfo) {
-      throw new Error(`El Space ${WAN_SPACE} no expone actualmente ${WAN_ENDPOINT}.`);
-    }
+    if (!endpointInfo) throw new Error(`El Space ${WAN_SPACE} no expone actualmente ${WAN_ENDPOINT}.`);
 
     normalizedImagePath = await normalizeReferenceImage(imagePath);
     const referenceImage = handle_file(normalizedImagePath);
-
     const animationPrompt = [
       'Photorealistic adult person animation.',
       'Preserve the exact person shown in the reference image, including face, hair, clothing, body proportions and scene.',
@@ -151,12 +145,14 @@ export async function generateFreeWanImageVideo({ imagePath, prompt }) {
 
     const data = Array.isArray(result?.data) ? result.data : result?.data ? [result.data] : [];
     const output = data.find((item) => pickVideoValue(item)) || data[0];
-    const outputUrl = await saveVideoResult(output);
+    const outputUrl = await saveVideoResult(output, audioText, audioLanguage);
 
     return {
       outputUrl,
       provider: `Wan2.1 I2V Fast (${WAN_SPACE})`,
-      detail: 'Vídeo generado con Wan2.1 I2V Fast y CausVid en 2 s de movimiento, convertido después a un clip final continuo de 5 s.'
+      detail: String(audioText || '').trim()
+        ? 'Vídeo generado con Wan2.1 I2V Fast y narración de voz añadida al vídeo final.'
+        : 'Vídeo generado con Wan2.1 I2V Fast y CausVid en 2 s de movimiento, convertido después a un clip final continuo de 5 s.'
     };
   } catch (error) {
     throw new Error(`Wan I2V no pudo generar el vídeo: ${describeError(error)}`);
