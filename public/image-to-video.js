@@ -154,7 +154,14 @@
       setLoading(audioText ? 'Preparando vídeo y narración…' : 'Enviando a Wan2.1 I2V Fast…', audioText ? `La fotografía se animará y la voz se generará en ${audioLanguage}.` : 'Motor IA gratuito: movimiento humano real desde la fotografía.');
       const response = await fetch('/api/video/image-to-video', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ prompt: promptInput.value.trim(), imageUrl, aspect: document.querySelector('#aspect')?.value || '16:9', resolution: resolutionInput.value, audioText, audioLanguage })
+        body: JSON.stringify({
+          prompt: JSON.stringify({ motion: promptInput.value.trim(), audioText, audioLanguage }),
+          imageUrl,
+          aspect: document.querySelector('#aspect')?.value || '16:9',
+          resolution: resolutionInput.value,
+          audioText,
+          audioLanguage
+        })
       });
       const data = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(data.error || 'No se pudo iniciar el vídeo desde la fotografía.');
