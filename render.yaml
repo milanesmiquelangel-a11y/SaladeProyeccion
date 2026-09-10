@@ -7,6 +7,14 @@ services:
     healthCheckPath: /api/health
     envVars:
       - key: VIDEO_PROVIDER
-        value: pixazo-ltx
+        value: wan2.1-i2v-fast
+      - key: IMAGE_VIDEO_ENGINE
+        value: wan-free
+      - key: WAN_FREE_SPACE
+        value: multimodalart/wan2-1-fast
+      - key: WAN_FREE_ENDPOINT
+        value: /generate_video
+      - key: HF_TOKEN
+        sync: false
       - key: PIXAZO_API_KEY
         sync: false
