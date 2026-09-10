@@ -120,27 +120,36 @@ async function runPixazoImageJob(job) {
 
 async function addOptionalVoice(job, videoUrl) {
   if (!job.audioText) return { outputUrl: videoUrl, audioUrl: '' };
+  job.providerState = 'GENERATING_AUDIO';
+  job.detail = `Generando narración ${normalizeAudioLanguage(job.audioLanguage)}…`;
   const audioPath = await generateSpeechAudio({ text: job.audioText, language: job.audioLanguage, outputDir: audioDir });
   const videoPath = path.join(publicDir, String(videoUrl).replace(/^\//, ''));
   const filename = `wan-audio-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.mp4`;
   const outputPath = path.join(publicDir, 'free-image-video', filename);
   await fs.mkdir(path.dirname(outputPath), { recursive: true });
-  await muxAudioIntoVideo({ videoPath, audioPath, outputPath, durationSeconds: 5 });
+  job.detail = 'Mezclando la narración con el vídeo final…';
+  const result = await muxAudioIntoVideo({ videoPath, audioPath, outputPath, durationSeconds: 5 }).then(() => ({ outputUrl: `/free-image-video/${filename}`, audioUrl: '' }));
   await fs.rm(audioPath, { force: true }).catch(() => {});
-  return { outputUrl: `/free-image-video/${filename}`, audioUrl: '' };
+  await fs.rm(videoPath, { force: true }).catch(() => {});
+  return result;
 }
 
 async function runFreeWanImageJob(job) {
   try {
-    job.providerState = 'QUEUED';
-    job.detail = job.audioText ? 'Wan2.1 I2V Fast está preparando el vídeo y después generará la narración…' : 'Wan2.1 I2V Fast gratuito está preparando el vídeo…';
+    job.providerState = 'CONNECTING_WAN';
+    job.detail = job.audioText
+      ? 'Conectando con Wan2.1 I2V Fast; después se añadirá una sola narración…'
+      : 'Conectando con Wan2.1 I2V Fast gratuito…';
     const result = await generateFreeWanImageVideo({ imagePath: job.imagePath, prompt: job.prompt });
     if (job.status === 'CANCELLED') return;
+    job.providerState = job.audioText ? 'GENERATING_AUDIO' : 'FINALIZING_VIDEO';
     const withAudio = await addOptionalVoice(job, result.outputUrl);
     job.outputUrl = withAudio.outputUrl;
     job.providerState = 'COMPLETED';
     job.status = 'COMPLETED';
-    job.detail = job.audioText ? `Vídeo IA de 5 s con narración ${normalizeAudioLanguage(job.audioLanguage)}.` : result.detail;
+    job.detail = job.audioText
+      ? `Vídeo IA de 5 s con una sola narración ${normalizeAudioLanguage(job.audioLanguage)}.`
+      : result.detail;
     if (job.userId && job.transactionId) await finalizeGeneration(job.userId, job.transactionId);
   } catch (error) {
     if (job.status === 'CANCELLED') return;
@@ -172,7 +181,11 @@ function mountImageRoutes(app) {
       };
       imageJobs.set(jobId, job);
       if (IMAGE_VIDEO_ENGINE === 'wan-free') {
-        runFreeWanImageJob(job).catch((error) => { job.status = 'ERROR'; job.detail = error.message || 'No se pudo completar la generación gratuita.'; });
+        runFreeWanImageJob(job).catch((error) => {
+          job.status = 'ERROR';
+          job.providerState = 'ERROR';
+          job.detail = `${error.message || 'No se pudo completar la generación gratuita.'} El crédito fue devuelto.`;
+        });
       } else {
         const requestId = await submitImageVideo(req, body);
         job.requestId = requestId;
