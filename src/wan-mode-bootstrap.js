@@ -1,5 +1,6 @@
+import 'dotenv/config';
 import express from 'express';
-import { checkDatabase, databaseConfigured } from './database.js';
+import { checkDatabase } from './database.js';
 
 const originalGet = express.application.get;
 const originalPost = express.application.post;
@@ -8,9 +9,9 @@ const WAN_SPACE = process.env.WAN_FREE_SPACE || 'multimodalart/wan2-1-fast';
 const WAN_ENDPOINT = process.env.WAN_FREE_ENDPOINT || '/generate_video';
 const HF_TOKEN = String(process.env.HF_TOKEN || process.env.HUGGINGFACE_TOKEN || '').trim();
 
-// Sala de Proyección now has one canonical video engine:
+// Canonical video engine for Sala de Proyección:
 // Wan 2.1 I2V Fast through the Hugging Face Space.
-// The legacy Pixazo text/sequence routes remain in server.js for compatibility,
+// Legacy Pixazo text/sequence routes remain in server.js only for compatibility,
 // but this bootstrap prevents them from being used accidentally.
 
 express.application.get = function wanModeGet(route, ...handlers) {
@@ -43,7 +44,7 @@ express.application.get = function wanModeGet(route, ...handlers) {
 express.application.post = function wanModePost(route, ...handlers) {
   if (route === '/api/video/generate' || route === '/api/video/sequence') {
     return originalPost.call(this, route, (_req, res) => res.status(410).json({
-      error: 'El motor de vídeo activo es Wan 2.1 I2V Fast. Esta ruta antigua de texto/escenas fue desactivada. Usa Generar vídeo desde fotografía.',
+      error: 'El motor de vídeo activo es Wan 2.1 I2V Fast. La ruta antigua de texto/escenas fue desactivada. Usa Generar vídeo desde fotografía.',
       provider: 'Wan2.1 I2V Fast',
       providerSpace: WAN_SPACE,
       generationMode: 'image-to-video'
@@ -51,5 +52,3 @@ express.application.post = function wanModePost(route, ...handlers) {
   }
   return originalPost.call(this, route, ...handlers);
 };
-
-void databaseConfigured;
