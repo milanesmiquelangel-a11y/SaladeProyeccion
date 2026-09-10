@@ -16,5 +16,3 @@ services:
         value: /generate_video
       - key: HF_TOKEN
         sync: false
-      - key: PIXAZO_API_KEY
-        sync: false
