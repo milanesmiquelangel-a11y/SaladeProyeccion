@@ -1,90 +1,62 @@
 # Sala de Proyección
 
-Aplicación web para preparar, organizar y generar vídeos con IA desde texto.
+International AI video studio for preparing, generating and organizing short AI video productions.
 
-## Estado actual
+## Current video engine
 
-La aplicación ya incluye:
+The canonical video engine is **Wan 2.1 I2V Fast** through the Hugging Face Space:
 
-- Interfaz web responsive.
-- Creación de proyectos y borradores.
-- Historial local de producciones.
-- Plantillas de prompts para cine, redes, producto y viajes.
-- Selección de formato y calidad para la preparación de cada proyecto.
-- Reproductor y enlace del vídeo generado cuando el proveedor devuelve una URL.
-- Indicadores de estado y manejo de errores.
-- Ajustes locales de idioma y autoguardado.
-- API key protegida en el servidor.
-- Dockerfile y configuración `render.yaml` para despliegue.
+- Space: `multimodalart/wan2-1-fast`
+- Endpoint: `/generate_video`
+- Runtime authentication: `HF_TOKEN`
+- Mode: image-to-video
+- The current Wan Fast workflow generates a short clip from a reference image; the application keeps the final clip at 5 seconds.
 
-Los proyectos y preferencias de la interfaz se almacenan localmente en el navegador. No se necesita una base de datos para esta fase.
+The repository no longer uses Pixazo as the active generation provider. Legacy Pixazo text/sequence handlers remain only inside the old server implementation for compatibility and are blocked by the Wan bootstrap entrypoint.
 
-## Proveedor de vídeo
+## Audio
 
-El proveedor inicial es **LTX de Pixazo**. La página oficial de APIs gratuitas actualmente documenta el endpoint gratuito unificado:
+The image-to-video workflow can optionally generate narration and mux it into the final MP4. The requested narration language is passed through the server and is not tied to the video engine language.
 
-`POST https://gateway.pixazo.ai/ltx/text-to-video`
+## Application
 
-La API utiliza una clave enviada mediante `Ocp-Apim-Subscription-Key` y el flujo de generación es asíncrono: se obtiene un `request_id` y se consulta posteriormente el estado.
+The web interface includes:
 
-La disponibilidad, límites y derechos de uso del nivel gratuito pueden cambiar. Para un lanzamiento comercial hay que revisar los términos vigentes del modelo y del proveedor.
+- Responsive video-production UI.
+- Project drafts and local history.
+- Prompt templates.
+- Reference-image upload.
+- Wan 2.1 I2V Fast generation.
+- Optional narration and audio/video muxing.
+- Billing and credit reservation through PostgreSQL.
+- Render deployment configuration.
 
-## Configuración local
+## Configuration
 
-1. Instala Node.js 18 o superior.
-2. Ejecuta `npm install`.
-3. Copia `.env.example` a `.env`.
-4. Introduce la clave en `PIXAZO_API_KEY` cuando esté disponible.
-5. Ejecuta `npm start`.
-6. Abre `http://localhost:3000`.
+Set these Render environment variables:
 
-La interfaz puede abrirse y utilizarse para preparar proyectos incluso antes de configurar la API key. La generación real necesita una clave válida.
+- `HF_TOKEN` — Hugging Face token with access to the ZeroGPU Space.
+- `WAN_FREE_SPACE` — defaults to `multimodalart/wan2-1-fast`.
+- `WAN_FREE_ENDPOINT` — defaults to `/generate_video`.
+- `DATABASE_URL` — PostgreSQL connection used by the billing system.
 
-## Variables de entorno
+Never commit secret tokens to GitHub.
 
-- `PORT`: puerto HTTP, por defecto `3000`.
-- `VIDEO_PROVIDER`: proveedor seleccionado, por defecto `pixazo-ltx`.
-- `PIXAZO_API_KEY`: clave secreta del proveedor; nunca debe publicarse.
-- `PIXAZO_VIDEO_URL`: permite cambiar el endpoint sin modificar el código.
-- `PIXAZO_STATUS_URL`: permite cambiar el endpoint de consulta de estado.
+## Deployment
 
-## API interna
+Render uses:
 
-### Salud
-
-`GET /api/health`
-
-Indica si el servidor está vivo y si el proveedor está configurado.
-
-### Generar vídeo
-
-`POST /api/video/generate`
-
-Body mínimo:
-
-```json
-{
-  "prompt": "A cinematic night drive through a futuristic city, realistic camera movement, rain and neon reflections"
-}
+```text
+npm install
+npm start
 ```
 
-### Consultar estado
+The application starts through `src/wan-mode-entry.js`, which activates the Wan-only source guard before loading the existing application entrypoint.
 
-`GET /api/video/status/:requestId`
+Health endpoint:
 
-## Seguridad
+```text
+GET /api/health
+```
 
-- Nunca colocar la API key en JavaScript del navegador.
-- Nunca subir `.env` a GitHub.
-- No guardar claves en localStorage.
-- Mantener la clave como variable secreta en el servicio de despliegue.
-
-## Despliegue
-
-El repositorio incluye `Dockerfile` y `render.yaml` para facilitar un despliegue como servicio web Node. La API key debe configurarse como secreto en el proveedor de hosting, no dentro del repositorio.
-
-## Verificación de despliegue
-
-Esta versión del repositorio se mantiene en la rama `main`. Si un servicio de hosting muestra una interfaz antigua (por ejemplo, la antigua pantalla de Wan2.2/Hugging Face), debe comprobarse que el servicio está conectado a este repositorio y a `main`, y que el despliegue utiliza el commit más reciente.
-
-<!-- deployment-verification: 2026-09-07 -->
+The health response identifies the active provider as **Wan2.1 I2V Fast** and reports whether Hugging Face and PostgreSQL are configured.
