@@ -70,7 +70,11 @@ export async function generateFreeWanImageVideo({ imagePath, prompt }) {
   let normalizedImagePath = '';
   try {
     if (!HF_TOKEN) throw new Error('Hugging Face requiere autenticación para usar la cuota ZeroGPU. Configura HF_TOKEN en Render con un token personal de Hugging Face (permiso Read).');
-    const request = parsePrompt(prompt); const app = await Client.connect(WAN_SPACE,{token:HF_TOKEN}); const api = await app.view_api();
+    const request = parsePrompt(prompt);
+    // @gradio/client expects the Hugging Face token under the `hf_token` option.
+    // Passing `{ token: ... }` silently leaves the ZeroGPU request unauthenticated.
+    const app = await Client.connect(WAN_SPACE,{hf_token:HF_TOKEN});
+    const api = await app.view_api();
     if (!api?.named_endpoints?.[WAN_ENDPOINT]) throw new Error(`El Space ${WAN_SPACE} no expone actualmente ${WAN_ENDPOINT}.`);
     normalizedImagePath = await normalizeReferenceImage(imagePath); const referenceImage = handle_file(normalizedImagePath);
     const animationPrompt = ['Photorealistic adult person animation.','Preserve the exact person shown in the reference image, including face, hair, clothing, body proportions and scene.','Do not create a different person, change clothing, redesign the body or change the background.','Very subtle natural motion only: gentle breathing, realistic blinking when a face is visible, and a tiny natural head movement when appropriate.','Stable identity, realistic anatomy, no morphing, no duplicate person, no face distortion, no camera movement.',request.motion].filter(Boolean).join(' ');
