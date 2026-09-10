@@ -1,6 +1,7 @@
 import express from 'express';
 import './image-video-entry.js';
 import billingRouter from './billing-routes.js';
+import { mountAudioApi } from './audio-api.js';
 import { dbQuery, databaseConfigured } from './database.js';
 import { getAccount, reserveGeneration, refundGeneration, recoverStaleGenerationReservations } from './billing-ledger.js';
 import { sequencePostHandler, sequenceStatusHandler, sequenceCancelHandler } from './sequence-continuity.js';
@@ -92,6 +93,10 @@ express.application.listen = function patchedListen(...args) {
   if (!this._salaBillingMounted) {
     this.use('/api/billing', billingRouter);
     this._salaBillingMounted = true;
+  }
+  if (!this._salaAudioMounted) {
+    mountAudioApi(this);
+    this._salaAudioMounted = true;
   }
   return originalListen.apply(this, args);
 };
