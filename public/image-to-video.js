@@ -25,6 +25,8 @@
   let imageJobId = null;
   let pollTimer = null;
   let previewUrl = '';
+  let jobStartedAt = 0;
+  const IMAGE_JOB_TIMEOUT_MS = 20 * 60 * 1000;
   const originalDurationDisabled = Array.from(durationInput?.options || []).map((option) => option.disabled);
 
   function setError(message) {
@@ -112,7 +114,13 @@
     imageJobId = jobId;
     clearTimeout(pollTimer);
     try {
-      const response = await fetch(`/api/video/image-to-video/${encodeURIComponent(jobId)}`);
+      const elapsed = Date.now() - jobStartedAt;
+      if (elapsed >= IMAGE_JOB_TIMEOUT_MS) {
+        await fetch(`/api/video/image-to-video/${encodeURIComponent(jobId)}/cancel`, { method: 'POST' }).catch(() => {});
+        throw new Error('La generación superó 20 minutos y fue cancelada. Si se había reservado un crédito, el servidor intentará devolverlo.');
+      }
+
+      const response = await fetch(`/api/video/image-to-video/${encodeURIComponent(jobId)}`, { cache: 'no-store' });
       const data = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(data.error || 'No se pudo consultar la generación.');
       if (data.status === 'COMPLETED' && data.outputUrl) {
@@ -132,9 +140,16 @@
       if (data.status === 'CANCELLED') {
         loadingState.classList.add('hidden'); statusText.textContent = 'Cancelado'; generateBtn.disabled = false; cancelBtn.disabled = true; imageJobId = null; return;
       }
-      setLoading(audioTextInput?.value.trim() ? 'Generando vídeo + narración…' : 'Animando fotografía con Wan2.1 I2V Fast…', `${data.providerState || 'procesando'}. ${data.detail || 'La cola puede tardar unos minutos.'}`);
+      const seconds = Math.floor(elapsed / 1000);
+      const minutes = Math.floor(seconds / 60);
+      const clock = `${minutes}:${String(seconds % 60).padStart(2, '0')}`;
+      setLoading(audioTextInput?.value.trim() ? 'Generando vídeo + narración…' : 'Animando fotografía con Wan2.1 I2V Fast…', `${data.providerState || 'procesando'} · tiempo transcurrido ${clock}. ${data.detail || 'Esperando al motor IA.'}`);
       pollTimer = setTimeout(() => pollImageJob(jobId), 5000);
-    } catch (error) { setError(error.message || 'No se pudo completar la generación.'); imageJobId = null; }
+    } catch (error) {
+      clearTimeout(pollTimer);
+      setError(error.message || 'No se pudo completar la generación.');
+      imageJobId = null;
+    }
   }
 
   form.addEventListener('submit', async (event) => {
@@ -145,6 +160,7 @@
     errorBox.classList.add('hidden');
     generateBtn.disabled = true;
     cancelBtn.disabled = false;
+    jobStartedAt = Date.now();
     try {
       await checkBalance(resolutionInput.value === 'high' ? 2 : 1);
       setLoading('Preparando fotografía…', 'Subiendo la imagen de referencia de forma segura.');
