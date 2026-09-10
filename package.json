@@ -4,10 +4,10 @@
   "private": true,
   "description": "Backend Node/Express para Sala de Proyección con generación y montaje de vídeo IA.",
   "type": "module",
-  "main": "src/monetized-entry.js",
+  "main": "src/wan-mode-entry.js",
   "scripts": {
-    "start": "node src/monetized-entry.js",
-    "dev": "node --watch src/monetized-entry.js"
+    "start": "node src/wan-mode-entry.js",
+    "dev": "node --watch src/wan-mode-entry.js"
   },
   "engines": {
     "node": ">=18"
