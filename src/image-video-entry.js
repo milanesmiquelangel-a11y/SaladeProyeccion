@@ -5,17 +5,18 @@ import { fileURLToPath } from 'node:url';
 import { randomUUID } from 'node:crypto';
 import { finalizeGeneration, refundGeneration } from './billing-ledger.js';
 import { generateFreeWanImageVideo } from './free-wan-image-video.js';
+import { generateSpeechAudio, muxAudioIntoVideo, normalizeAudioLanguage } from './audio-tts.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const publicDir = path.join(__dirname, '..', 'public');
 const uploadsDir = path.join(publicDir, 'uploads');
+const audioDir = path.join(publicDir, 'generated-audio');
 const PIXAZO_API_KEY = process.env.PIXAZO_API_KEY;
 const PIXAZO_IMAGE_VIDEO_URL = process.env.PIXAZO_IMAGE_VIDEO_URL || 'https://gateway.pixazo.ai/seedance-2-5/v1/first-last-frame-to-video';
 const PIXAZO_STATUS_URL = 'https://gateway.pixazo.ai/v2/requests/status';
 const IMAGE_TIMEOUT_MS = 20 * 60 * 1000;
 const imageJobs = new Map();
 const IMAGE_VIDEO_ENGINE = String(process.env.IMAGE_VIDEO_ENGINE || 'wan-free').toLowerCase();
-
 const nativeListen = express.application.listen;
 
 function absolutePublicUrl(req, relativePath) {
@@ -32,9 +33,7 @@ function extensionFor(contentType) {
 
 async function uploadImage(req, res) {
   const contentType = String(req.get('content-type') || '').split(';')[0].toLowerCase();
-  if (!['image/jpeg', 'image/png', 'image/webp'].includes(contentType)) {
-    return res.status(415).json({ error: 'La fotografía debe ser JPG, PNG o WEBP.' });
-  }
+  if (!['image/jpeg', 'image/png', 'image/webp'].includes(contentType)) return res.status(415).json({ error: 'La fotografía debe ser JPG, PNG o WEBP.' });
   if (!Buffer.isBuffer(req.body) || !req.body.length) return res.status(400).json({ error: 'No se recibió ninguna fotografía.' });
   if (req.body.length > 20 * 1024 * 1024) return res.status(413).json({ error: 'La fotografía no puede superar 20 MB.' });
   await fs.mkdir(uploadsDir, { recursive: true });
@@ -58,7 +57,6 @@ async function submitImageVideo(req, body) {
   const duration = Math.max(4, Math.min(30, requestedDuration));
   const ratio = ['16:9', '9:16', '1:1', '4:3', '3:4', '21:9'].includes(body.aspect) ? body.aspect : '16:9';
   const resolution = body.resolution === 'high' ? '720p' : '480p';
-
   const prompt = [
     'Create a real photorealistic AI video from the supplied photograph.',
     'The photograph is the exact identity reference for the person.',
@@ -68,27 +66,14 @@ async function submitImageVideo(req, body) {
     'Natural human motion, realistic skin and anatomy, stable identity, stable clothing, stable background, cinematic realistic camera movement.',
     'No face swap, no identity drift, no morphing, no extra people, no duplicate body parts, no deformed hands, no distorted face, no cartoon or CGI appearance.'
   ].join(' ');
-
   const payload = {
-    content: [
-      { type: 'image_url', image_url: { url: imageUrl } },
-      { type: 'image_url', image_url: { url: imageUrl } }
-    ],
-    prompt: prompt.slice(0, 5000),
-    duration,
-    ratio,
-    resolution,
+    content: [{ type: 'image_url', image_url: { url: imageUrl } }, { type: 'image_url', image_url: { url: imageUrl } }],
+    prompt: prompt.slice(0, 5000), duration, ratio, resolution,
     generate_audio: false,
     watermark: false
   };
-
   const response = await fetch(PIXAZO_IMAGE_VIDEO_URL, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'Cache-Control': 'no-cache',
-      'Ocp-Apim-Subscription-Key': PIXAZO_API_KEY
-    },
+    method: 'POST', headers: { 'Content-Type': 'application/json', 'Cache-Control': 'no-cache', 'Ocp-Apim-Subscription-Key': PIXAZO_API_KEY },
     body: JSON.stringify(payload)
   });
   const data = await response.json().catch(() => ({}));
@@ -106,9 +91,7 @@ async function runPixazoImageJob(job) {
   try {
     while (Date.now() < deadline) {
       if (job.status === 'CANCELLED') return;
-      const response = await fetch(`${PIXAZO_STATUS_URL}/${encodeURIComponent(job.requestId)}`, {
-        headers: { 'Ocp-Apim-Subscription-Key': PIXAZO_API_KEY }
-      });
+      const response = await fetch(`${PIXAZO_STATUS_URL}/${encodeURIComponent(job.requestId)}`, { headers: { 'Ocp-Apim-Subscription-Key': PIXAZO_API_KEY } });
       const data = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(data?.message || data?.error || `Pixazo no pudo consultar el estado (HTTP ${response.status}).`);
       const state = String(data.status || data.state || '').toUpperCase();
@@ -135,16 +118,29 @@ async function runPixazoImageJob(job) {
   }
 }
 
+async function addOptionalVoice(job, videoUrl) {
+  if (!job.audioText) return { outputUrl: videoUrl, audioUrl: '' };
+  const audioPath = await generateSpeechAudio({ text: job.audioText, language: job.audioLanguage, outputDir: audioDir });
+  const videoPath = path.join(publicDir, String(videoUrl).replace(/^\//, ''));
+  const filename = `wan-audio-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.mp4`;
+  const outputPath = path.join(publicDir, 'free-image-video', filename);
+  await fs.mkdir(path.dirname(outputPath), { recursive: true });
+  await muxAudioIntoVideo({ videoPath, audioPath, outputPath, durationSeconds: 5 });
+  await fs.rm(audioPath, { force: true }).catch(() => {});
+  return { outputUrl: `/free-image-video/${filename}`, audioUrl: '' };
+}
+
 async function runFreeWanImageJob(job) {
   try {
     job.providerState = 'QUEUED';
-    job.detail = 'Wan2.1 I2V Fast gratuito está preparando el vídeo…';
+    job.detail = job.audioText ? 'Wan2.1 I2V Fast está preparando el vídeo y después generará la narración…' : 'Wan2.1 I2V Fast gratuito está preparando el vídeo…';
     const result = await generateFreeWanImageVideo({ imagePath: job.imagePath, prompt: job.prompt });
     if (job.status === 'CANCELLED') return;
-    job.outputUrl = result.outputUrl;
+    const withAudio = await addOptionalVoice(job, result.outputUrl);
+    job.outputUrl = withAudio.outputUrl;
     job.providerState = 'COMPLETED';
     job.status = 'COMPLETED';
-    job.detail = result.detail;
+    job.detail = job.audioText ? `Vídeo IA de 5 s con narración ${normalizeAudioLanguage(job.audioLanguage)}.` : result.detail;
     if (job.userId && job.transactionId) await finalizeGeneration(job.userId, job.transactionId);
   } catch (error) {
     if (job.status === 'CANCELLED') return;
@@ -164,41 +160,24 @@ function mountImageRoutes(app) {
     const body = req.body || {};
     if (typeof body.prompt !== 'string' || !body.prompt.trim()) return res.status(400).json({ error: 'prompt es obligatorio.' });
     if (!body.imageUrl || !String(body.imageUrl).startsWith('/uploads/')) return res.status(400).json({ error: 'Selecciona una fotografía antes de generar.' });
-
     const imagePath = path.join(publicDir, String(body.imageUrl).slice('/'.length));
     try {
       await fs.access(imagePath);
       const jobId = randomUUID();
       const job = {
-        id: jobId,
-        requestId: '',
-        status: 'PROCESSING',
-        providerState: 'QUEUED',
-        createdAt: Date.now(),
-        outputUrl: '',
-        detail: IMAGE_VIDEO_ENGINE === 'wan-free'
-          ? 'Enviando la fotografía al motor Wan2.1 I2V Fast gratuito…'
-          : 'Enviando la fotografía al motor de vídeo IA…',
-        userId: req.salaBillingUserId,
-        transactionId: req.salaBillingTransactionId,
-        imagePath,
-        prompt: body.prompt
+        id: jobId, requestId: '', status: 'PROCESSING', providerState: 'QUEUED', createdAt: Date.now(), outputUrl: '',
+        detail: IMAGE_VIDEO_ENGINE === 'wan-free' ? 'Enviando la fotografía al motor Wan2.1 I2V Fast gratuito…' : 'Enviando la fotografía al motor de vídeo IA…',
+        userId: req.salaBillingUserId, transactionId: req.salaBillingTransactionId, imagePath,
+        prompt: body.prompt, audioText: String(body.audioText || '').trim().slice(0, 4000), audioLanguage: normalizeAudioLanguage(body.audioLanguage)
       };
       imageJobs.set(jobId, job);
-
       if (IMAGE_VIDEO_ENGINE === 'wan-free') {
-        runFreeWanImageJob(job).catch((error) => {
-          job.status = 'ERROR';
-          job.detail = error.message || 'No se pudo completar la generación gratuita.';
-        });
+        runFreeWanImageJob(job).catch((error) => { job.status = 'ERROR'; job.detail = error.message || 'No se pudo completar la generación gratuita.'; });
       } else {
         const requestId = await submitImageVideo(req, body);
         job.requestId = requestId;
         await removeTemporaryUpload(body.imageUrl);
-        runPixazoImageJob(job).catch((error) => {
-          job.status = 'ERROR';
-          job.detail = error.message || 'No se pudo completar la generación.';
-        });
+        runPixazoImageJob(job).catch((error) => { job.status = 'ERROR'; job.detail = error.message || 'No se pudo completar la generación.'; });
       }
       return res.status(202).json({ job_id: jobId, request_id: job.requestId, provider: IMAGE_VIDEO_ENGINE });
     } catch (error) {
