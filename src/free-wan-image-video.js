@@ -138,11 +138,10 @@ export async function generateFreeWanImageVideo({ imagePath, prompt }) {
 
     const request = parsePrompt(prompt);
 
-    // @gradio/client uses the `token` option for the Hugging Face Bearer token.
-    // Ask for status events so queued/runtime failures are visible to our server.
+    // The public Wan Space currently runs Gradio 5.30.0, whose matching JS client is 1.10.1.
+    // Use the 1.x authentication option name here; newer 2.x clients use `token`.
     const app = await Client.connect(WAN_SPACE, {
-      token: HF_TOKEN,
-      events: ['data', 'status'],
+      hf_token: HF_TOKEN,
       status_callback: (status) => {
         const state = String(status?.status || '').toLowerCase();
         const detail = String(status?.detail || '').toUpperCase();
@@ -179,7 +178,6 @@ export async function generateFreeWanImageVideo({ imagePath, prompt }) {
     try {
       // Wan Fast is intentionally called with 2 seconds / 48 frames at 24 FPS.
       // The application stretches that generated clip to the final 5-second MP4 afterwards.
-      // This prevents the remote Space from ever receiving a 5-second/long request.
       const submission = app.submit(WAN_ENDPOINT, [
         referenceImage,
         animationPrompt.slice(0, 4000),
