@@ -7,12 +7,12 @@ services:
     healthCheckPath: /api/health
     envVars:
       - key: VIDEO_PROVIDER
-        value: sadtalker
+        value: freeai
       - key: IMAGE_VIDEO_ENGINE
-        value: sadtalker
-      - key: SADTALKER_FREE_SPACE
-        value: henrybit/SadTalker-Demo
-      - key: SADTALKER_FREE_ENDPOINT
-        value: /generate
+        value: freeai
+      - key: FREEAI_TALKING_HEAD_ENDPOINT
+        value: https://api.free.ai/v1/video/talking-head/
+      - key: FREEAI_API_KEY
+        sync: false
       - key: HF_TOKEN
         sync: false
