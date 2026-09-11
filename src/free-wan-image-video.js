@@ -1,17 +1,26 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { spawn } from 'node:child_process';
+import ffmpegPath from 'ffmpeg-static';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const publicDir = path.join(__dirname, '..', 'public');
 const freeOutputDir = path.join(publicDir, 'free-image-video');
 
 // Free image-to-video engine: Wan 2.1 I2V Fast on the public Hugging Face
-// ZeroGPU Space. The Space currently exposes a Gradio API backed by the
-// Wan2.1-I2V-14B model + CausVid LoRA and is designed for fast 4-8 step runs.
+// ZeroGPU Space. The Space is most reliable with its native 2-second / 4-step
+// configuration. We extend that short clip to the product's final 5 seconds
+// locally with FFmpeg, so the GPU job stays small and reliable.
 const VIDEO_SPACE = process.env.WAN_FREE_SPACE || 'multimodalart/wan2-1-fast';
 const VIDEO_ENDPOINT = process.env.WAN_FREE_ENDPOINT || '/generate_video';
 const HF_TOKEN = String(process.env.HF_TOKEN || process.env.HUGGINGFACE_TOKEN || '').trim();
+const FINAL_DURATION_SECONDS = 5;
+const MODEL_DURATION_SECONDS = 2;
+const MODEL_HEIGHT = 320;
+const MODEL_WIDTH = 576;
+const MODEL_STEPS = 4;
+const MODEL_GUIDANCE = 1;
 
 const DEFAULT_PROMPT = [
   'Photorealistic cinematic image-to-video animation.',
@@ -48,7 +57,22 @@ function pickVideoValue(value) {
 function describeError(error) {
   const message = error?.message || String(error || 'Error desconocido');
   const cause = error?.cause?.message ? ` (${error.cause.message})` : '';
-  return `${message}${cause}`;
+  const details = error?.details ? ` ${String(error.details).slice(0, 800)}` : '';
+  return `${message}${cause}${details}`;
+}
+
+function runFfmpeg(args) {
+  return new Promise((resolve, reject) => {
+    if (!ffmpegPath) return reject(new Error('FFmpeg no está disponible en el servidor.'));
+    const child = spawn(ffmpegPath, args, { stdio: ['ignore', 'ignore', 'pipe'] });
+    let stderr = '';
+    child.stderr.on('data', (chunk) => { stderr += chunk.toString(); });
+    child.on('error', reject);
+    child.on('close', (code) => {
+      if (code === 0) resolve();
+      else reject(new Error(`FFmpeg terminó con código ${code}: ${stderr.slice(-900)}`));
+    });
+  });
 }
 
 async function saveVideoResult(value) {
@@ -56,7 +80,7 @@ async function saveVideoResult(value) {
   if (!videoValue) throw new Error('Wan 2.1 terminó sin devolver el vídeo generado.');
 
   await fs.mkdir(freeOutputDir, { recursive: true });
-  const filename = `wan-i2v-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.mp4`;
+  const filename = `wan-i2v-source-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.mp4`;
   const destination = path.join(freeOutputDir, filename);
 
   if (videoValue.startsWith('data:')) {
@@ -70,6 +94,29 @@ async function saveVideoResult(value) {
   } else {
     await fs.copyFile(videoValue, destination);
   }
+
+  return destination;
+}
+
+async function makeFiveSecondVideo(sourcePath) {
+  const filename = `wan-i2v-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.mp4`;
+  const destination = path.join(freeOutputDir, filename);
+
+  // Ping-pong the 2-second Wan clip (2s forward + 2s reverse + first 1s),
+  // producing exactly 5 seconds while preserving the generated motion.
+  await runFfmpeg([
+    '-y', '-i', sourcePath,
+    '-filter_complex', '[0:v]split=2[a][b];[b]reverse[b_rev];[a][b_rev][a]concat=n=3:v=1:a=0[outv]',
+    '-map', '[outv]',
+    '-t', String(FINAL_DURATION_SECONDS),
+    '-r', '24',
+    '-an',
+    '-c:v', 'libx264',
+    '-preset', 'veryfast',
+    '-pix_fmt', 'yuv420p',
+    '-movflags', '+faststart',
+    destination
+  ]);
 
   return `/free-image-video/${filename}`;
 }
@@ -90,6 +137,7 @@ function findEndpoint(api) {
 }
 
 export async function generateFreeWanImageVideo({ imagePath, prompt }) {
+  let sourcePath = '';
   try {
     if (!HF_TOKEN) {
       throw new Error('Hugging Face requiere autenticación. Configura HF_TOKEN en Render con un token personal de Hugging Face con permiso Read.');
@@ -108,34 +156,39 @@ export async function generateFreeWanImageVideo({ imagePath, prompt }) {
 
     const animationPrompt = [DEFAULT_PROMPT, String(prompt || '').trim()].filter(Boolean).join(' ').slice(0, 6000);
 
-    // These 10 inputs mirror the current public Wan2.1 Fast Space:
+    // The current public Space uses these 10 inputs:
     // image, prompt, height, width, negative prompt, duration, guidance,
-    // steps, seed and randomize-seed.
+    // steps, seed and randomize-seed. Its GPU wrapper is explicitly tuned
+    // around 2 seconds + 4 steps, so keep the inference at that safe profile.
     const result = await app.predict(endpoint, [
       handle_file(imagePath),
       animationPrompt,
-      512,
-      896,
+      MODEL_HEIGHT,
+      MODEL_WIDTH,
       DEFAULT_NEGATIVE,
-      5,
-      1,
-      4,
+      MODEL_DURATION_SECONDS,
+      MODEL_GUIDANCE,
+      MODEL_STEPS,
       42,
       true
     ]);
 
     const data = Array.isArray(result?.data) ? result.data : result?.data ? [result.data] : [];
     const output = data.find((item) => pickVideoValue(item?.video || item)) || data[0];
-    const outputUrl = await saveVideoResult(output?.video || output);
+    sourcePath = await saveVideoResult(output?.video || output);
+
+    const outputUrl = await makeFiveSecondVideo(sourcePath);
+    await fs.rm(sourcePath, { force: true }).catch(() => {});
 
     return {
       outputUrl,
       provider: `Wan 2.1 I2V Fast (${VIDEO_SPACE})`,
-      detail: 'Vídeo generado con Wan 2.1 I2V Fast desde la fotografía.'
+      detail: 'Vídeo generado con Wan 2.1 I2V Fast y convertido a 5 segundos.'
     };
   } catch (error) {
     throw new Error(`Wan 2.1 I2V no pudo generar el vídeo: ${describeError(error)}`);
   } finally {
+    if (sourcePath) await fs.rm(sourcePath, { force: true }).catch(() => {});
     if (imagePath) await fs.rm(imagePath, { force: true }).catch(() => {});
   }
 }
