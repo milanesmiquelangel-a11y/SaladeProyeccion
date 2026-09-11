@@ -138,10 +138,11 @@ export async function generateFreeWanImageVideo({ imagePath, prompt }) {
 
     const request = parsePrompt(prompt);
 
-    // The public Wan Space currently runs Gradio 5.30.0, whose matching JS client is 1.10.1.
-    // Use the 1.x authentication option name here; newer 2.x clients use `token`.
+    // This project uses the Node.js @gradio/client 2.x API.
+    // Its Hugging Face authentication option is `token`.
     const app = await Client.connect(WAN_SPACE, {
-      hf_token: HF_TOKEN,
+      token: HF_TOKEN,
+      events: ['data', 'status'],
       status_callback: (status) => {
         const state = String(status?.status || '').toLowerCase();
         const detail = String(status?.detail || '').toUpperCase();
