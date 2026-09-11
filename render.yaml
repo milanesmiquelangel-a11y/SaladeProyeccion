@@ -7,12 +7,12 @@ services:
     healthCheckPath: /api/health
     envVars:
       - key: VIDEO_PROVIDER
-        value: ltx-2-3
+        value: sadtalker
       - key: IMAGE_VIDEO_ENGINE
-        value: ltx-2-3
-      - key: LTX_FREE_SPACE
-        value: Lightricks/LTX-2-3
-      - key: LTX_FREE_ENDPOINT
-        value: /generate_video
+        value: sadtalker
+      - key: SADTALKER_FREE_SPACE
+        value: henrybit/SadTalker-Demo
+      - key: SADTALKER_FREE_ENDPOINT
+        value: /generate
       - key: HF_TOKEN
         sync: false
