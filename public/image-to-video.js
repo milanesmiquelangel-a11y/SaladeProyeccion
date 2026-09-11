@@ -129,7 +129,7 @@
         videoLink.href = data.outputUrl;
         videoLink.classList.remove('hidden');
         loadingState.classList.add('hidden');
-        statusText.textContent = 'Completado';
+        statusText.textContent = audioTextInput?.value.trim() ? 'Completado · vídeo + audio' : 'Completado';
         saveHistory(data.outputUrl);
         generateBtn.disabled = false;
         cancelBtn.disabled = true;
@@ -143,7 +143,7 @@
       const seconds = Math.floor(elapsed / 1000);
       const minutes = Math.floor(seconds / 60);
       const clock = `${minutes}:${String(seconds % 60).padStart(2, '0')}`;
-      setLoading(audioTextInput?.value.trim() ? 'Generando vídeo + narración…' : 'Animando fotografía con Wan2.1 I2V Fast…', `${data.providerState || 'procesando'} · tiempo transcurrido ${clock}. ${data.detail || 'Esperando al motor IA.'}`);
+      setLoading(audioTextInput?.value.trim() ? 'Generando vídeo + narración…' : 'Animando fotografía con IA…', `${data.providerState || 'procesando'} · tiempo transcurrido ${clock}. ${data.detail || 'Esperando al motor IA.'}`);
       pollTimer = setTimeout(() => pollImageJob(jobId), 5000);
     } catch (error) {
       clearTimeout(pollTimer);
@@ -167,11 +167,11 @@
       const imageUrl = await uploadPhoto();
       const audioText = String(audioTextInput?.value || '').trim();
       const audioLanguage = audioLanguageInput?.value || 'en';
-      setLoading(audioText ? 'Preparando vídeo y narración…' : 'Enviando a Wan2.1 I2V Fast…', audioText ? `La fotografía se animará y la voz se generará en ${audioLanguage}.` : 'Motor IA gratuito: movimiento humano real desde la fotografía.');
+      setLoading(audioText ? 'Preparando vídeo y narración…' : 'Enviando al motor de vídeo IA…', audioText ? `La fotografía se animará y la voz se generará en ${audioLanguage}.` : 'Movimiento humano real desde la fotografía.');
       const response = await fetch('/api/video/image-to-video', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          prompt: JSON.stringify({ motion: promptInput.value.trim(), audioText, audioLanguage }),
+          prompt: promptInput.value.trim(),
           imageUrl,
           aspect: document.querySelector('#aspect')?.value || '16:9',
           resolution: resolutionInput.value,
