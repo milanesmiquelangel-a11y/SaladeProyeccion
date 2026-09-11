@@ -17,7 +17,7 @@ const PIXAZO_IMAGE_VIDEO_URL = process.env.PIXAZO_IMAGE_VIDEO_URL || 'https://ga
 const PIXAZO_STATUS_URL = 'https://gateway.pixazo.ai/v2/requests/status';
 const IMAGE_TIMEOUT_MS = 20 * 60 * 1000;
 const imageJobs = new Map();
-const IMAGE_VIDEO_ENGINE = String(process.env.IMAGE_VIDEO_ENGINE || 'liveportrait').toLowerCase();
+const IMAGE_VIDEO_ENGINE = String(process.env.IMAGE_VIDEO_ENGINE || 'ltx-2-3').toLowerCase();
 const nativeListen = express.application.listen;
 
 function absolutePublicUrl(req, relativePath) {
@@ -119,28 +119,18 @@ async function addOptionalVoice(job, videoUrl) {
   return { outputUrl };
 }
 
-async function runLivePortraitWithFallback(job) {
+async function runLtxImageJob(job, imageUrl) {
   try {
-    job.providerState = 'LIVEPORTRAIT';
-    job.detail = 'Probando LivePortrait con movimiento facial natural…';
-    return await generateLivePortraitVideo({ imagePath: job.imagePath });
-  } catch (liveError) {
-    job.providerState = 'WAN2.1_FALLBACK';
-    job.detail = 'LivePortrait no pudo animar el rostro; cambiando automáticamente a Wan2.1…';
-    return await generateFreeWanImageVideo({ imagePath: job.imagePath, prompt: job.prompt });
-  }
-}
-
-async function runFreeWanImageJob(job) {
-  try {
-    const result = await runLivePortraitWithFallback(job);
+    job.providerState = 'LTX_2_3';
+    job.detail = 'Generando vídeo con LTX 2.3 Fast y audio nativo…';
+    const result = await generateFreeWanImageVideo({ imagePath: job.imagePath, imageUrl, prompt: job.prompt });
     if (job.status === 'CANCELLED') return;
     const withAudio = await addOptionalVoice(job, result.outputUrl);
     job.outputUrl = withAudio.outputUrl;
     job.providerState = 'COMPLETED';
     job.status = 'COMPLETED';
     job.detail = job.audioText
-      ? `Vídeo IA de 5 s con narración ${normalizeAudioLanguage(job.audioLanguage)}.`
+      ? `Vídeo IA de 5 s con audio nativo y narración ${normalizeAudioLanguage(job.audioLanguage)}.`
       : result.detail;
     if (job.userId && job.transactionId) await finalizeGeneration(job.userId, job.transactionId);
   } catch (error) {
@@ -148,7 +138,7 @@ async function runFreeWanImageJob(job) {
     if (job.userId && job.transactionId) await refundGeneration(job.userId, job.transactionId, 'image_generation_failed');
     job.status = 'ERROR';
     job.providerState = 'ERROR';
-    job.detail = `${error.message || 'LivePortrait y Wan2.1 no pudieron completar el vídeo.'} El crédito fue devuelto.`;
+    job.detail = `${error.message || 'LTX 2.3 no pudo completar el vídeo.'} El crédito fue devuelto.`;
   } finally {
     if (job.imagePath) await fs.rm(job.imagePath, { force: true }).catch(() => {});
   }
@@ -165,15 +155,16 @@ function mountImageRoutes(app) {
     try {
       await fs.access(imagePath);
       const jobId = randomUUID();
+      const imageUrl = absolutePublicUrl(req, body.imageUrl);
       const job = {
         id: jobId, requestId: '', status: 'PROCESSING', providerState: 'QUEUED', createdAt: Date.now(), outputUrl: '',
-        detail: 'Preparando LivePortrait; si falla, usará Wan2.1 automáticamente…',
-        userId: req.salaBillingUserId, transactionId: req.salaBillingTransactionId, imagePath,
+        detail: 'Preparando LTX 2.3 Fast con movimiento IA y audio nativo…',
+        userId: req.salaBillingUserId, transactionId: req.salaBillingTransactionId, imagePath, imageUrl,
         prompt: body.prompt, audioText: String(body.audioText || '').trim().slice(0, 4000), audioLanguage: normalizeAudioLanguage(body.audioLanguage)
       };
       imageJobs.set(jobId, job);
-      if (IMAGE_VIDEO_ENGINE === 'liveportrait' || IMAGE_VIDEO_ENGINE === 'auto' || IMAGE_VIDEO_ENGINE === 'wan-free') {
-        runFreeWanImageJob(job).catch((error) => { job.status = 'ERROR'; job.providerState = 'ERROR'; job.detail = error.message || 'No se pudo completar la generación.'; });
+      if (IMAGE_VIDEO_ENGINE === 'ltx-2-3' || IMAGE_VIDEO_ENGINE === 'ltx' || IMAGE_VIDEO_ENGINE === 'auto' || IMAGE_VIDEO_ENGINE === 'wan-free') {
+        runLtxImageJob(job, imageUrl).catch((error) => { job.status = 'ERROR'; job.providerState = 'ERROR'; job.detail = error.message || 'No se pudo completar la generación.'; });
       } else {
         const requestId = await submitImageVideo(req, body);
         job.requestId = requestId;
