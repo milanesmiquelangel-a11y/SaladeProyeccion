@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { randomUUID } from 'node:crypto';
 import { finalizeGeneration, refundGeneration } from './billing-ledger.js';
 import { generateFreeWanImageVideo } from './free-wan-image-video.js';
+import { generateFreeSadTalkerVideo } from './free-sadtalker.js';
 import { generateLivePortraitVideo } from './free-liveportrait.js';
 import { generateSpeechAudio, muxAudioIntoVideo, normalizeAudioLanguage } from './audio-tts.js';
 
@@ -17,7 +18,7 @@ const PIXAZO_IMAGE_VIDEO_URL = process.env.PIXAZO_IMAGE_VIDEO_URL || 'https://ga
 const PIXAZO_STATUS_URL = 'https://gateway.pixazo.ai/v2/requests/status';
 const IMAGE_TIMEOUT_MS = 20 * 60 * 1000;
 const imageJobs = new Map();
-const IMAGE_VIDEO_ENGINE = String(process.env.IMAGE_VIDEO_ENGINE || 'ltx-2-3').toLowerCase();
+const IMAGE_VIDEO_ENGINE = String(process.env.IMAGE_VIDEO_ENGINE || 'sadtalker').toLowerCase();
 const nativeListen = express.application.listen;
 
 function absolutePublicUrl(req, relativePath) {
@@ -102,44 +103,43 @@ async function runPixazoImageJob(job) {
   }
 }
 
-async function addOptionalVoice(job, videoUrl) {
-  if (!job.audioText) return { outputUrl: videoUrl };
-  job.providerState = 'GENERATING_AUDIO';
-  job.detail = `Generando narración ${normalizeAudioLanguage(job.audioLanguage)}…`;
-  const audioPath = await generateSpeechAudio({ text: job.audioText, language: job.audioLanguage, outputDir: audioDir });
-  const videoPath = path.join(publicDir, String(videoUrl).replace(/^\//, ''));
-  const filename = `image-video-audio-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.mp4`;
-  const outputPath = path.join(publicDir, 'free-image-video', filename);
-  await fs.mkdir(path.dirname(outputPath), { recursive: true });
-  job.detail = 'Mezclando la narración con el vídeo final…';
-  const outputUrl = `/free-image-video/${filename}`;
-  await muxAudioIntoVideo({ videoPath, audioPath, outputPath, durationSeconds: 5 });
-  await fs.rm(audioPath, { force: true }).catch(() => {});
-  await fs.rm(videoPath, { force: true }).catch(() => {});
-  return { outputUrl };
-}
-
-async function runLtxImageJob(job, imageUrl) {
+async function runTalkingImageJob(job) {
+  let audioPath = '';
   try {
-    job.providerState = 'LTX_2_3';
-    job.detail = 'Generando vídeo con LTX 2.3 Fast y audio nativo…';
-    const result = await generateFreeWanImageVideo({ imagePath: job.imagePath, imageUrl, prompt: job.prompt });
+    if (!job.audioText) {
+      job.providerState = 'LTX_2_3';
+      job.detail = 'Sin narración: generando movimiento visual con LTX 2.3…';
+      const result = await generateFreeWanImageVideo({ imagePath: job.imagePath, prompt: job.prompt });
+      if (job.status === 'CANCELLED') return;
+      job.outputUrl = result.outputUrl;
+      job.providerState = 'COMPLETED';
+      job.status = 'COMPLETED';
+      job.detail = result.detail;
+      if (job.userId && job.transactionId) await finalizeGeneration(job.userId, job.transactionId);
+      return;
+    }
+
+    job.providerState = 'GENERATING_AUDIO';
+    job.detail = `Preparando audio hablado ${normalizeAudioLanguage(job.audioLanguage)} para sincronizar la boca…`;
+    audioPath = await generateSpeechAudio({ text: job.audioText, language: job.audioLanguage, outputDir: audioDir });
+
+    job.providerState = 'SADTALKER';
+    job.detail = 'Animando la fotografía con SadTalker: sincronizando boca, expresiones y cabeza con la voz…';
+    const result = await generateFreeSadTalkerVideo({ imagePath: job.imagePath, audioPath });
     if (job.status === 'CANCELLED') return;
-    const withAudio = await addOptionalVoice(job, result.outputUrl);
-    job.outputUrl = withAudio.outputUrl;
+    job.outputUrl = result.outputUrl;
     job.providerState = 'COMPLETED';
     job.status = 'COMPLETED';
-    job.detail = job.audioText
-      ? `Vídeo IA de 5 s con audio nativo y narración ${normalizeAudioLanguage(job.audioLanguage)}.`
-      : result.detail;
+    job.detail = `Vídeo hablado de 5 s con boca sincronizada y audio ${normalizeAudioLanguage(job.audioLanguage)}.`;
     if (job.userId && job.transactionId) await finalizeGeneration(job.userId, job.transactionId);
   } catch (error) {
     if (job.status === 'CANCELLED') return;
     if (job.userId && job.transactionId) await refundGeneration(job.userId, job.transactionId, 'image_generation_failed');
     job.status = 'ERROR';
     job.providerState = 'ERROR';
-    job.detail = `${error.message || 'LTX 2.3 no pudo completar el vídeo.'} El crédito fue devuelto.`;
+    job.detail = `${error.message || 'No se pudo completar el vídeo hablado.'} El crédito fue devuelto.`;
   } finally {
+    if (audioPath) await fs.rm(audioPath, { force: true }).catch(() => {});
     if (job.imagePath) await fs.rm(job.imagePath, { force: true }).catch(() => {});
   }
 }
@@ -158,13 +158,13 @@ function mountImageRoutes(app) {
       const imageUrl = absolutePublicUrl(req, body.imageUrl);
       const job = {
         id: jobId, requestId: '', status: 'PROCESSING', providerState: 'QUEUED', createdAt: Date.now(), outputUrl: '',
-        detail: 'Preparando LTX 2.3 Fast con movimiento IA y audio nativo…',
+        detail: 'Preparando vídeo desde la fotografía…',
         userId: req.salaBillingUserId, transactionId: req.salaBillingTransactionId, imagePath, imageUrl,
         prompt: body.prompt, audioText: String(body.audioText || '').trim().slice(0, 4000), audioLanguage: normalizeAudioLanguage(body.audioLanguage)
       };
       imageJobs.set(jobId, job);
-      if (IMAGE_VIDEO_ENGINE === 'ltx-2-3' || IMAGE_VIDEO_ENGINE === 'ltx' || IMAGE_VIDEO_ENGINE === 'auto' || IMAGE_VIDEO_ENGINE === 'wan-free') {
-        runLtxImageJob(job, imageUrl).catch((error) => { job.status = 'ERROR'; job.providerState = 'ERROR'; job.detail = error.message || 'No se pudo completar la generación.'; });
+      if (IMAGE_VIDEO_ENGINE === 'sadtalker' || IMAGE_VIDEO_ENGINE === 'talking-head' || IMAGE_VIDEO_ENGINE === 'ltx-2-3' || IMAGE_VIDEO_ENGINE === 'ltx' || IMAGE_VIDEO_ENGINE === 'auto' || IMAGE_VIDEO_ENGINE === 'wan-free') {
+        runTalkingImageJob(job).catch((error) => { job.status = 'ERROR'; job.providerState = 'ERROR'; job.detail = error.message || 'No se pudo completar la generación.'; });
       } else {
         const requestId = await submitImageVideo(req, body);
         job.requestId = requestId;
