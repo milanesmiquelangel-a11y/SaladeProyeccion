@@ -7,12 +7,12 @@ services:
     healthCheckPath: /api/health
     envVars:
       - key: VIDEO_PROVIDER
-        value: wan2.1-i2v-fast
+        value: ltx-2-3
       - key: IMAGE_VIDEO_ENGINE
-        value: wan-free
-      - key: WAN_FREE_SPACE
-        value: multimodalart/wan2-1-fast
-      - key: WAN_FREE_ENDPOINT
+        value: ltx-2-3
+      - key: LTX_FREE_SPACE
+        value: Lightricks/LTX-2-3
+      - key: LTX_FREE_ENDPOINT
         value: /generate_video
       - key: HF_TOKEN
         sync: false
