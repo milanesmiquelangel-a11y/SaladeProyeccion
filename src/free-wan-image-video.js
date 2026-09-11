@@ -138,8 +138,7 @@ export async function generateFreeWanImageVideo({ imagePath, prompt }) {
 
     const request = parsePrompt(prompt);
 
-    // This project uses the Node.js @gradio/client 2.x API.
-    // Its Hugging Face authentication option is `token`.
+    // Node @gradio/client 2.x uses the `token` option for Hugging Face authentication.
     const app = await Client.connect(WAN_SPACE, {
       token: HF_TOKEN,
       events: ['data', 'status'],
@@ -177,13 +176,15 @@ export async function generateFreeWanImageVideo({ imagePath, prompt }) {
     ].filter(Boolean).join(' ');
 
     try {
-      // Wan Fast is intentionally called with 2 seconds / 48 frames at 24 FPS.
-      // The application stretches that generated clip to the final 5-second MP4 afterwards.
+      // Wan Fast officially uses 32-pixel multiples. For a 16:9 horizontal image,
+      // 448x832 is the Space's own area-based target family (and its public example
+      // uses 448x832 for landscape/portrait counterpart). Keep the 2-second/48-frame
+      // fast clip and stretch it to the requested final 5-second MP4 afterwards.
       const submission = app.submit(WAN_ENDPOINT, [
         referenceImage,
         animationPrompt.slice(0, 4000),
-        320,
-        576,
+        448,
+        832,
         'distorted face, identity drift, morphing, extra people, duplicate body parts, deformed hands, cartoon, CGI, low resolution, blurry, pixelated, text, watermark',
         2,
         1,
