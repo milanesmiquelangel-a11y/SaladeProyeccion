@@ -4,16 +4,16 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawn } from 'node:child_process';
 import ffmpegPath from 'ffmpeg-static';
+import { generateNarrationAudio } from './audio-narration.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const publicDir = path.join(__dirname, '..', 'public');
 const freeOutputDir = path.join(publicDir, 'free-image-video');
 const freeTempDir = path.join(freeOutputDir, 'tmp');
 
-// Wan2.2 Animate-2-14B: reference image + driving video.
-const VIDEO_SPACE = process.env.WAN_FREE_SPACE || 'hugging-apps/wan2-2-animate-2-14b';
-const VIDEO_ENDPOINT = process.env.WAN_FREE_ENDPOINT || '/animate';
-const WAN_MOTION_TEMPLATE = process.env.WAN_MOTION_TEMPLATE || 'https://raw.githubusercontent.com/Wan-Video/Wan2.2/main/examples/wan_animate/animate/video.mp4';
+// Free, authenticated Hugging Face Space using Wan2.1 I2V + CausVid LoRA.
+const VIDEO_SPACE = process.env.WAN_FREE_SPACE || 'multimodalart/wan2-1-fast';
+const VIDEO_ENDPOINT = process.env.WAN_FREE_ENDPOINT || '/generate_video';
 const HF_TOKEN = String(process.env.HF_TOKEN || process.env.HUGGINGFACE_TOKEN || '').trim();
 
 function pickVideoValue(value) {
@@ -47,14 +47,43 @@ function runFfmpeg(args) {
   });
 }
 
-async function saveVideoResult(value) {
+async function normalizeReferenceImage(imagePath) {
+  await fs.mkdir(freeTempDir, { recursive: true });
+  const output = path.join(freeTempDir, `ref-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.jpg`);
+  await runFfmpeg([
+    '-y', '-loop', '1', '-i', imagePath, '-frames:v', '1',
+    '-filter_complex',
+    '[0:v]scale=576:320:force_original_aspect_ratio=increase,crop=576:320,gblur=sigma=18[bg];' +
+    '[0:v]scale=576:320:force_original_aspect_ratio=decrease[fg];' +
+    '[bg][fg]overlay=(W-w)/2:(H-h)/2,format=yuv420p[out]',
+    '-map', '[out]', '-q:v', '2', output
+  ]);
+  return output;
+}
+
+function parsePrompt(value) {
+  try {
+    const parsed = JSON.parse(String(value || ''));
+    if (parsed && typeof parsed === 'object') {
+      return {
+        motion: String(parsed.motion || '').trim(),
+        audioText: String(parsed.audioText || '').trim(),
+        audioLanguage: String(parsed.audioLanguage || 'en').trim()
+      };
+    }
+  } catch {}
+  return { motion: String(value || '').trim(), audioText: '', audioLanguage: 'en' };
+}
+
+async function saveVideoResult(value, audioText = '', audioLanguage = 'en') {
   const videoValue = pickVideoValue(value);
-  if (!videoValue) throw new Error('Wan2.2 terminó sin devolver el vídeo generado.');
+  if (!videoValue) throw new Error('Wan2.1 terminó sin devolver el vídeo generado.');
   await fs.mkdir(freeOutputDir, { recursive: true });
   await fs.mkdir(freeTempDir, { recursive: true });
-  const filename = `wan22-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.mp4`;
-  const rawDestination = path.join(freeTempDir, filename);
+  const filename = `wan-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.mp4`;
+  const rawDestination = path.join(freeTempDir, `${filename}.raw.mp4`);
   const destination = path.join(freeOutputDir, filename);
+
   if (videoValue.startsWith('http://') || videoValue.startsWith('https://')) {
     const response = await fetch(videoValue);
     if (!response.ok) throw new Error(`No se pudo descargar el vídeo generado (HTTP ${response.status}).`);
@@ -62,21 +91,40 @@ async function saveVideoResult(value) {
   } else {
     await fs.copyFile(videoValue, rawDestination);
   }
-  // 2 seconds of AI motion, then a continuous 5-second final clip.
-  await runFfmpeg(['-y', '-i', rawDestination, '-vf', 'setpts=2.5*PTS', '-t', '5', '-an', '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '18', '-pix_fmt', 'yuv420p', '-movflags', '+faststart', destination]);
-  await fs.rm(rawDestination, { force: true }).catch(() => {});
+
+  let audioPath = '';
+  try {
+    if (String(audioText || '').trim()) {
+      const audio = await generateNarrationAudio({ text: audioText, language: audioLanguage });
+      audioPath = audio?.path || '';
+      if (!audioPath) throw new Error('El servicio de voz no devolvió una pista de audio.');
+    }
+
+    if (audioPath) {
+      await runFfmpeg([
+        '-y', '-i', rawDestination, '-i', audioPath,
+        '-filter_complex', '[1:a]apad[a]',
+        '-map', '0:v:0', '-map', '[a]',
+        '-vf', 'setpts=2.5*PTS', '-t', '5',
+        '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '18', '-pix_fmt', 'yuv420p',
+        '-c:a', 'aac', '-b:a', '128k', '-movflags', '+faststart', destination
+      ]);
+    } else {
+      await runFfmpeg([
+        '-y', '-i', rawDestination, '-vf', 'setpts=2.5*PTS', '-t', '5', '-an',
+        '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '18', '-pix_fmt', 'yuv420p',
+        '-movflags', '+faststart', destination
+      ]);
+    }
+  } finally {
+    await fs.rm(rawDestination, { force: true }).catch(() => {});
+    if (audioPath) await fs.rm(audioPath, { force: true }).catch(() => {});
+  }
   return `/free-image-video/${filename}`;
 }
 
-function parsePrompt(value) {
-  try {
-    const parsed = JSON.parse(String(value || ''));
-    if (parsed && typeof parsed === 'object') return { motion: String(parsed.motion || '').trim() };
-  } catch {}
-  return { motion: String(value || '').trim() };
-}
-
 export async function generateFreeWanImageVideo({ imagePath, prompt }) {
+  let normalizedImagePath = '';
   try {
     if (!HF_TOKEN) throw new Error('Hugging Face requiere autenticación. Configura HF_TOKEN en Render con un token personal de Hugging Face (permiso Read).');
     const request = parsePrompt(prompt);
@@ -86,8 +134,9 @@ export async function generateFreeWanImageVideo({ imagePath, prompt }) {
       const available = Object.keys(api?.named_endpoints || {}).join(', ');
       throw new Error(`El Space ${VIDEO_SPACE} no expone ${VIDEO_ENDPOINT}. Endpoints: ${available || 'ninguno'}.`);
     }
-    const referenceImage = handle_file(imagePath);
-    const drivingVideo = handle_file(WAN_MOTION_TEMPLATE);
+
+    normalizedImagePath = await normalizeReferenceImage(imagePath);
+    const referenceImage = handle_file(normalizedImagePath);
     const animationPrompt = [
       'Photorealistic adult person animation.',
       'Preserve the exact person shown in the reference image, including face, hair, clothing, body proportions and scene.',
@@ -96,28 +145,33 @@ export async function generateFreeWanImageVideo({ imagePath, prompt }) {
       'Stable identity, realistic anatomy, no morphing, no duplicate person, no face distortion, no camera movement.',
       request.motion
     ].filter(Boolean).join(' ');
+
     const result = await app.predict(VIDEO_ENDPOINT, [
       referenceImage,
-      drivingVideo,
       animationPrompt.slice(0, 4000),
-      2,
-      480,
-      384,
-      6,
-      1,
-      2,
+      320,
+      576,
       'distorted face, identity drift, morphing, extra people, duplicate body parts, deformed hands, cartoon, CGI, low resolution, blurry, pixelated, text, watermark',
-      0
+      2,
+      1,
+      4,
+      42,
+      false
     ]);
+
     const data = Array.isArray(result?.data) ? result.data : result?.data ? [result.data] : [];
     const output = data.find((item) => pickVideoValue(item)) || data[0];
-    const outputUrl = await saveVideoResult(output);
+    const outputUrl = await saveVideoResult(output, request.audioText, request.audioLanguage);
     return {
       outputUrl,
-      provider: `Wan2.2 Animate (${VIDEO_SPACE})`,
-      detail: 'Prueba con Wan2.2 Animate-2-14B: 2 s de movimiento IA y salida final continua de 5 s.'
+      provider: `Wan2.1 I2V Fast (${VIDEO_SPACE})`,
+      detail: request.audioText
+        ? 'Vídeo generado con Wan2.1 I2V Fast y narración añadida al MP4 final.'
+        : 'Vídeo generado con Wan2.1 I2V Fast y CausVid en 2 s de movimiento, convertido después a un clip final continuo de 5 s.'
     };
   } catch (error) {
-    throw new Error(`Wan2.2 no pudo generar el vídeo: ${describeError(error)}`);
+    throw new Error(`Wan2.1 no pudo generar el vídeo: ${describeError(error)}`);
+  } finally {
+    if (normalizedImagePath) await fs.rm(normalizedImagePath, { force: true }).catch(() => {});
   }
 }
