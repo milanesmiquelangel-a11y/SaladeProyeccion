@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { randomUUID } from 'node:crypto';
 import { finalizeGeneration, refundGeneration } from './billing-ledger.js';
 import { generateFreeWanImageVideo } from './free-wan-image-video.js';
+import { generateLivePortraitVideo } from './free-liveportrait.js';
 import { generateSpeechAudio, muxAudioIntoVideo, normalizeAudioLanguage } from './audio-tts.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -16,7 +17,7 @@ const PIXAZO_IMAGE_VIDEO_URL = process.env.PIXAZO_IMAGE_VIDEO_URL || 'https://ga
 const PIXAZO_STATUS_URL = 'https://gateway.pixazo.ai/v2/requests/status';
 const IMAGE_TIMEOUT_MS = 20 * 60 * 1000;
 const imageJobs = new Map();
-const IMAGE_VIDEO_ENGINE = String(process.env.IMAGE_VIDEO_ENGINE || 'wan-free').toLowerCase();
+const IMAGE_VIDEO_ENGINE = String(process.env.IMAGE_VIDEO_ENGINE || 'liveportrait').toLowerCase();
 const nativeListen = express.application.listen;
 
 function absolutePublicUrl(req, relativePath) {
@@ -57,25 +58,9 @@ async function submitImageVideo(req, body) {
   const duration = Math.max(4, Math.min(30, requestedDuration));
   const ratio = ['16:9', '9:16', '1:1', '4:3', '3:4', '21:9'].includes(body.aspect) ? body.aspect : '16:9';
   const resolution = body.resolution === 'high' ? '720p' : '480p';
-  const prompt = [
-    'Create a real photorealistic AI video from the supplied photograph.',
-    'The photograph is the exact identity reference for the person.',
-    'Preserve the same person, face, facial structure, hair, clothing, body proportions and appearance throughout the entire video.',
-    'Do not replace, redesign or reinterpret the person.',
-    motion || 'The person makes subtle natural movements: gentle breathing, a natural blink and a very small head movement while remaining in the same place.',
-    'Natural human motion, realistic skin and anatomy, stable identity, stable clothing, stable background, cinematic realistic camera movement.',
-    'No face swap, no identity drift, no morphing, no extra people, no duplicate body parts, no deformed hands, no distorted face, no cartoon or CGI appearance.'
-  ].join(' ');
-  const payload = {
-    content: [{ type: 'image_url', image_url: { url: imageUrl } }, { type: 'image_url', image_url: { url: imageUrl } }],
-    prompt: prompt.slice(0, 5000), duration, ratio, resolution,
-    generate_audio: false,
-    watermark: false
-  };
-  const response = await fetch(PIXAZO_IMAGE_VIDEO_URL, {
-    method: 'POST', headers: { 'Content-Type': 'application/json', 'Cache-Control': 'no-cache', 'Ocp-Apim-Subscription-Key': PIXAZO_API_KEY },
-    body: JSON.stringify(payload)
-  });
+  const prompt = ['Create a real photorealistic AI video from the supplied photograph.', 'The photograph is the exact identity reference for the person.', 'Preserve the same person, face, facial structure, hair, clothing, body proportions and appearance throughout the entire video.', 'Do not replace, redesign or reinterpret the person.', motion || 'The person makes subtle natural movements: gentle breathing, a natural blink and a very small head movement while remaining in the same place.', 'Natural human motion, realistic skin and anatomy, stable identity, stable clothing, stable background, cinematic realistic camera movement.', 'No face swap, no identity drift, no morphing, no extra people, no duplicate body parts, no deformed hands, no distorted face, no cartoon or CGI appearance.'].join(' ');
+  const payload = { content: [{ type: 'image_url', image_url: { url: imageUrl } }, { type: 'image_url', image_url: { url: imageUrl } }], prompt: prompt.slice(0, 5000), duration, ratio, resolution, generate_audio: false, watermark: false };
+  const response = await fetch(PIXAZO_IMAGE_VIDEO_URL, { method: 'POST', headers: { 'Content-Type': 'application/json', 'Cache-Control': 'no-cache', 'Ocp-Apim-Subscription-Key': PIXAZO_API_KEY }, body: JSON.stringify(payload) });
   const data = await response.json().catch(() => ({}));
   if (!response.ok) {
     const message = data?.message || data?.error || data?.detail;
@@ -96,7 +81,6 @@ async function runPixazoImageJob(job) {
       if (!response.ok) throw new Error(data?.message || data?.error || `Pixazo no pudo consultar el estado (HTTP ${response.status}).`);
       const state = String(data.status || data.state || '').toUpperCase();
       job.providerState = state;
-      if (job.status === 'CANCELLED') return;
       if (state === 'COMPLETED' || state === 'SUCCEEDED' || data.output?.media_url) {
         const rawUrl = data.output?.media_url;
         job.outputUrl = Array.isArray(rawUrl) ? rawUrl[0] : rawUrl;
@@ -119,36 +103,44 @@ async function runPixazoImageJob(job) {
 }
 
 async function addOptionalVoice(job, videoUrl) {
-  if (!job.audioText) return { outputUrl: videoUrl, audioUrl: '' };
+  if (!job.audioText) return { outputUrl: videoUrl };
   job.providerState = 'GENERATING_AUDIO';
   job.detail = `Generando narración ${normalizeAudioLanguage(job.audioLanguage)}…`;
   const audioPath = await generateSpeechAudio({ text: job.audioText, language: job.audioLanguage, outputDir: audioDir });
   const videoPath = path.join(publicDir, String(videoUrl).replace(/^\//, ''));
-  const filename = `wan-audio-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.mp4`;
+  const filename = `image-video-audio-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.mp4`;
   const outputPath = path.join(publicDir, 'free-image-video', filename);
   await fs.mkdir(path.dirname(outputPath), { recursive: true });
   job.detail = 'Mezclando la narración con el vídeo final…';
-  const result = await muxAudioIntoVideo({ videoPath, audioPath, outputPath, durationSeconds: 5 }).then(() => ({ outputUrl: `/free-image-video/${filename}`, audioUrl: '' }));
+  const outputUrl = `/free-image-video/${filename}`;
+  await muxAudioIntoVideo({ videoPath, audioPath, outputPath, durationSeconds: 5 });
   await fs.rm(audioPath, { force: true }).catch(() => {});
   await fs.rm(videoPath, { force: true }).catch(() => {});
-  return result;
+  return { outputUrl };
+}
+
+async function runLivePortraitWithFallback(job) {
+  try {
+    job.providerState = 'LIVEPORTRAIT';
+    job.detail = 'Probando LivePortrait con movimiento facial natural…';
+    return await generateLivePortraitVideo({ imagePath: job.imagePath });
+  } catch (liveError) {
+    job.providerState = 'WAN2.1_FALLBACK';
+    job.detail = 'LivePortrait no pudo animar el rostro; cambiando automáticamente a Wan2.1…';
+    return await generateFreeWanImageVideo({ imagePath: job.imagePath, prompt: job.prompt });
+  }
 }
 
 async function runFreeWanImageJob(job) {
   try {
-    job.providerState = 'CONNECTING_WAN';
-    job.detail = job.audioText
-      ? 'Conectando con Wan2.1 I2V Fast; después se añadirá una sola narración…'
-      : 'Conectando con Wan2.1 I2V Fast gratuito…';
-    const result = await generateFreeWanImageVideo({ imagePath: job.imagePath, prompt: job.prompt });
+    const result = await runLivePortraitWithFallback(job);
     if (job.status === 'CANCELLED') return;
-    job.providerState = job.audioText ? 'GENERATING_AUDIO' : 'FINALIZING_VIDEO';
     const withAudio = await addOptionalVoice(job, result.outputUrl);
     job.outputUrl = withAudio.outputUrl;
     job.providerState = 'COMPLETED';
     job.status = 'COMPLETED';
     job.detail = job.audioText
-      ? `Vídeo IA de 5 s con una sola narración ${normalizeAudioLanguage(job.audioLanguage)}.`
+      ? `Vídeo IA de 5 s con narración ${normalizeAudioLanguage(job.audioLanguage)}.`
       : result.detail;
     if (job.userId && job.transactionId) await finalizeGeneration(job.userId, job.transactionId);
   } catch (error) {
@@ -156,7 +148,7 @@ async function runFreeWanImageJob(job) {
     if (job.userId && job.transactionId) await refundGeneration(job.userId, job.transactionId, 'image_generation_failed');
     job.status = 'ERROR';
     job.providerState = 'ERROR';
-    job.detail = `${error.message || 'El motor Wan2.1 I2V Fast no pudo completar el vídeo.'} El crédito fue devuelto.`;
+    job.detail = `${error.message || 'LivePortrait y Wan2.1 no pudieron completar el vídeo.'} El crédito fue devuelto.`;
   } finally {
     if (job.imagePath) await fs.rm(job.imagePath, { force: true }).catch(() => {});
   }
@@ -175,17 +167,13 @@ function mountImageRoutes(app) {
       const jobId = randomUUID();
       const job = {
         id: jobId, requestId: '', status: 'PROCESSING', providerState: 'QUEUED', createdAt: Date.now(), outputUrl: '',
-        detail: IMAGE_VIDEO_ENGINE === 'wan-free' ? 'Enviando la fotografía al motor Wan2.1 I2V Fast gratuito…' : 'Enviando la fotografía al motor de vídeo IA…',
+        detail: 'Preparando LivePortrait; si falla, usará Wan2.1 automáticamente…',
         userId: req.salaBillingUserId, transactionId: req.salaBillingTransactionId, imagePath,
         prompt: body.prompt, audioText: String(body.audioText || '').trim().slice(0, 4000), audioLanguage: normalizeAudioLanguage(body.audioLanguage)
       };
       imageJobs.set(jobId, job);
-      if (IMAGE_VIDEO_ENGINE === 'wan-free') {
-        runFreeWanImageJob(job).catch((error) => {
-          job.status = 'ERROR';
-          job.providerState = 'ERROR';
-          job.detail = `${error.message || 'No se pudo completar la generación gratuita.'} El crédito fue devuelto.`;
-        });
+      if (IMAGE_VIDEO_ENGINE === 'liveportrait' || IMAGE_VIDEO_ENGINE === 'auto' || IMAGE_VIDEO_ENGINE === 'wan-free') {
+        runFreeWanImageJob(job).catch((error) => { job.status = 'ERROR'; job.providerState = 'ERROR'; job.detail = error.message || 'No se pudo completar la generación.'; });
       } else {
         const requestId = await submitImageVideo(req, body);
         job.requestId = requestId;
