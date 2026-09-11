@@ -15,9 +15,24 @@ const ENDPOINT = process.env.FREEAI_TALKING_HEAD_ENDPOINT || 'https://api.free.a
 const FINAL_SECONDS = 5;
 
 function requireApiKey() {
-  if (!API_KEY) {
-    throw new Error('FREEAI_API_KEY no está configurada en Render. Añade la clave de Free.ai como secreto.');
-  }
+  if (!API_KEY) throw new Error('FREEAI_API_KEY no está configurada en Render. Añade la clave de Free.ai como secreto.');
+}
+
+function mimeType(filePath, fallback) {
+  const ext = path.extname(filePath).toLowerCase();
+  if (ext === '.png') return 'image/png';
+  if (ext === '.webp') return 'image/webp';
+  if (ext === '.wav') return 'audio/wav';
+  if (ext === '.m4a') return 'audio/mp4';
+  if (ext === '.ogg' || ext === '.oga') return 'audio/ogg';
+  return fallback;
+}
+
+function describeValue(value) {
+  if (value == null) return '';
+  if (typeof value === 'string') return value;
+  if (value instanceof Error) return value.message;
+  try { return JSON.stringify(value); } catch { return String(value); }
 }
 
 async function runFfmpeg(args) {
@@ -62,8 +77,8 @@ export async function generateFreeAITalkingHead({ imagePath, audioPath }) {
   const image = await fs.readFile(imagePath);
   const audio = await fs.readFile(audioPath);
   const form = new FormData();
-  form.append('image', new Blob([image], { type: 'image/jpeg' }), path.basename(imagePath));
-  form.append('audio', new Blob([audio], { type: 'audio/mpeg' }), path.basename(audioPath));
+  form.append('image', new Blob([image], { type: mimeType(imagePath, 'image/jpeg') }), path.basename(imagePath));
+  form.append('audio', new Blob([audio], { type: mimeType(audioPath, 'audio/wav') }), path.basename(audioPath));
 
   const response = await fetch(ENDPOINT, {
     method: 'POST',
@@ -72,12 +87,12 @@ export async function generateFreeAITalkingHead({ imagePath, audioPath }) {
   });
   const data = await response.json().catch(() => ({}));
   if (!response.ok) {
-    const message = data?.error || data?.message || data?.detail;
+    const message = describeValue(data?.error) || describeValue(data?.message) || describeValue(data?.detail) || describeValue(data);
     throw new Error(message ? `Free.ai rechazó la generación: ${message}` : `Free.ai rechazó la generación (HTTP ${response.status}).`);
   }
 
   const rawUrl = pickVideoUrl(data);
-  if (!rawUrl) throw new Error(`Free.ai no devolvió una URL de vídeo. Respuesta: ${JSON.stringify(data).slice(0, 1200)}`);
+  if (!rawUrl) throw new Error(`Free.ai no devolvió una URL de vídeo. Respuesta: ${describeValue(data).slice(0, 1600)}`);
 
   const rawPath = path.join(outputDir, `${randomUUID()}-raw.mp4`);
   const finalName = `${randomUUID()}.mp4`;
