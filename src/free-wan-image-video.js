@@ -4,11 +4,14 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawn } from 'node:child_process';
 import ffmpegPath from 'ffmpeg-static';
+import { generateSpeech } from './audio-service.js';
+import { attachGeneratedAudio } from './patch-audio-mux.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const publicDir = path.join(__dirname, '..', 'public');
 const freeOutputDir = path.join(publicDir, 'free-image-video');
 const freeTempDir = path.join(publicDir, 'free-image-video', 'tmp');
+const generatedAudioDir = path.join(publicDir, 'generated-audio');
 const WAN_SPACE = process.env.WAN_FREE_SPACE || 'multimodalart/wan2-1-fast';
 const WAN_ENDPOINT = process.env.WAN_FREE_ENDPOINT || '/generate_video';
 const HF_TOKEN = String(process.env.HF_TOKEN || process.env.HUGGINGFACE_TOKEN || '').trim();
@@ -101,6 +104,34 @@ async function saveVideoResult(value) {
 
   await fs.rm(rawDestination, { force: true }).catch(() => {});
   return `/free-image-video/${filename}`;
+}
+
+async function addNarration(outputUrl, audioText, audioLanguage) {
+  const cleanText = String(audioText || '').trim();
+  if (!cleanText) return { outputUrl, detail: '' };
+
+  const sourceVideoName = path.basename(String(outputUrl).split('?')[0]);
+  const sourceVideoPath = path.join(freeOutputDir, sourceVideoName);
+  const audioResult = await generateSpeech({ text: cleanText, language: audioLanguage, outputDir: generatedAudioDir });
+  const voiceName = `${path.parse(sourceVideoName).name}-voice.mp4`;
+  const voicePath = path.join(freeOutputDir, voiceName);
+
+  try {
+    await attachGeneratedAudio({
+      videoPath: sourceVideoPath,
+      audioPath: audioResult.filePath,
+      outputPath: voicePath,
+      durationSeconds: 5
+    });
+  } finally {
+    await fs.rm(audioResult.filePath, { force: true }).catch(() => {});
+  }
+
+  await fs.rm(sourceVideoPath, { force: true }).catch(() => {});
+  return {
+    outputUrl: `/free-image-video/${voiceName}`,
+    detail: `Vídeo generado con Wan2.1 I2V Fast y narración ${audioResult.provider} en ${audioResult.language}.`
+  };
 }
 
 function safeJson(value, max = 1800) {
@@ -228,13 +259,12 @@ export async function generateFreeWanImageVideo({ imagePath, prompt }) {
       const data = Array.isArray(outputData) ? outputData : outputData ? [outputData] : [];
       const output = data.find((item) => pickVideoValue(item)) || data[0];
       const outputUrl = await saveVideoResult(output);
+      const narrated = await addNarration(outputUrl, request.audioText, request.audioLanguage);
 
       return {
-        outputUrl,
+        outputUrl: narrated.outputUrl,
         provider: `Wan2.1 I2V Fast (${WAN_SPACE})`,
-        detail: request.audioText
-          ? 'Vídeo generado con Wan2.1 I2V Fast; la narración se añadirá en una sola etapa.'
-          : 'Vídeo generado con Wan2.1 I2V Fast y CausVid; clip final de 5 segundos.'
+        detail: narrated.detail || 'Vídeo generado con Wan2.1 I2V Fast y CausVid; clip final de 5 segundos.'
       };
     } catch (error) {
       const statusDetail = lastSpaceError ? ` Estado real del Space: ${lastSpaceError}.` : '';
