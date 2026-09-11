@@ -103,6 +103,16 @@ async function saveVideoResult(value) {
   return `/free-image-video/${filename}`;
 }
 
+function safeJson(value, max = 1800) {
+  if (value == null) return '';
+  try {
+    const text = JSON.stringify(value);
+    return text.length > max ? `${text.slice(0, max)}…` : text;
+  } catch {
+    return String(value).slice(0, max);
+  }
+}
+
 function formatWanStatus(status) {
   if (!status) return '';
   const parts = [
@@ -110,9 +120,10 @@ function formatWanStatus(status) {
     status.code,
     status.message,
     status.detail,
-    status.queue ? `queue=${status.queue}` : '',
+    status.queue != null ? `queue=${status.queue}` : '',
     Number.isFinite(status.position) ? `position=${status.position}` : '',
-    Number.isFinite(status.eta) ? `eta=${status.eta}s` : ''
+    Number.isFinite(status.eta) ? `eta=${status.eta}s` : '',
+    status.original_msg ? `original_msg=${safeJson(status.original_msg)}` : ''
   ].filter(Boolean);
   return parts.join(' | ');
 }
@@ -199,8 +210,6 @@ export async function generateFreeWanImageVideo({ imagePath, prompt }) {
           if (stage === 'error' || message?.success === false) {
             terminalStatus = message;
             lastSpaceError = text || lastSpaceError || 'Wan devolvió un error sin detalles adicionales.';
-            // Stop consuming immediately on terminal error. Some published
-            // Gradio JS clients report the error event but may not close the iterator.
             break;
           }
         }
@@ -212,8 +221,8 @@ export async function generateFreeWanImageVideo({ imagePath, prompt }) {
       }
 
       if (terminalStatus || lastSpaceError) {
-        const detail = lastSpaceError || formatWanStatus(terminalStatus);
-        throw new Error(`Wan devolvió un error durante /generate_video${detail ? `: ${detail}` : '.'}`);
+        const detail = formatWanStatus(terminalStatus) || lastSpaceError || 'sin detalles adicionales';
+        throw new Error(`Wan devolvió un error durante /generate_video: ${detail}`);
       }
 
       const data = Array.isArray(outputData) ? outputData : outputData ? [outputData] : [];
