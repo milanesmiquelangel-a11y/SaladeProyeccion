@@ -46,13 +46,22 @@ async function runFfmpeg(args) {
   }
 }
 
-async function normalizeFiveSeconds(inputPath, outputPath) {
+async function normalizeFiveSeconds(inputPath, audioPath, outputPath) {
   await runFfmpeg([
-    '-y', '-i', inputPath,
+    '-y',
+    '-i', inputPath,
+    '-i', audioPath,
     '-t', String(FINAL_SECONDS),
+    '-map', '0:v:0',
+    '-map', '1:a:0',
     '-vf', 'fps=25,scale=720:-2:force_original_aspect_ratio=decrease,pad=720:720:(ow-iw)/2:(oh-ih)/2',
-    '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-movflags', '+faststart',
-    '-an', outputPath,
+    '-c:v', 'libx264',
+    '-pix_fmt', 'yuv420p',
+    '-c:a', 'aac',
+    '-b:a', '128k',
+    '-shortest',
+    '-movflags', '+faststart',
+    outputPath,
   ]);
 }
 
@@ -99,13 +108,13 @@ export async function generateFreeAITalkingHead({ imagePath, audioPath }) {
   const finalPath = path.join(outputDir, finalName);
   try {
     await downloadVideo(rawUrl, rawPath);
-    await normalizeFiveSeconds(rawPath, finalPath);
+    await normalizeFiveSeconds(rawPath, audioPath, finalPath);
   } finally {
     await fs.rm(rawPath, { force: true }).catch(() => {});
   }
 
   return {
     outputUrl: `/free-image-video/${finalName}`,
-    detail: 'Vídeo hablado de 5 s generado con Free.ai, sin ZeroGPU de Hugging Face.',
+    detail: 'Vídeo hablado de 5 s generado con Free.ai, con la narración sincronizada y sin ZeroGPU de Hugging Face.',
   };
 }
