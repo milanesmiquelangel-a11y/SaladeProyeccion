@@ -46,6 +46,18 @@ async function runFfmpeg(args) {
   }
 }
 
+async function trimAudioToFiveSeconds(inputPath, outputPath) {
+  await runFfmpeg([
+    '-y',
+    '-i', inputPath,
+    '-t', String(FINAL_SECONDS),
+    '-vn',
+    '-c:a', 'aac',
+    '-b:a', '128k',
+    outputPath,
+  ]);
+}
+
 async function normalizeFiveSeconds(inputPath, audioPath, outputPath) {
   await runFfmpeg([
     '-y',
@@ -83,38 +95,48 @@ export async function generateFreeAITalkingHead({ imagePath, audioPath }) {
   if (!audioPath) throw new Error('No se encontró el audio.');
   await fs.mkdir(outputDir, { recursive: true });
 
-  const image = await fs.readFile(imagePath);
-  const audio = await fs.readFile(audioPath);
-  const form = new FormData();
-  form.append('image', new Blob([image], { type: mimeType(imagePath, 'image/jpeg') }), path.basename(imagePath));
-  form.append('audio', new Blob([audio], { type: mimeType(audioPath, 'audio/wav') }), path.basename(audioPath));
-
-  const response = await fetch(ENDPOINT, {
-    method: 'POST',
-    headers: { Authorization: `Bearer ${API_KEY}` },
-    body: form,
-  });
-  const data = await response.json().catch(() => ({}));
-  if (!response.ok) {
-    const message = describeValue(data?.error) || describeValue(data?.message) || describeValue(data?.detail) || describeValue(data);
-    throw new Error(message ? `Free.ai rechazó la generación: ${message}` : `Free.ai rechazó la generación (HTTP ${response.status}).`);
-  }
-
-  const rawUrl = pickVideoUrl(data);
-  if (!rawUrl) throw new Error(`Free.ai no devolvió una URL de vídeo. Respuesta: ${describeValue(data).slice(0, 1600)}`);
-
-  const rawPath = path.join(outputDir, `${randomUUID()}-raw.mp4`);
-  const finalName = `${randomUUID()}.mp4`;
-  const finalPath = path.join(outputDir, finalName);
+  const trimmedAudioPath = path.join(outputDir, `${randomUUID()}-5s-audio.m4a`);
   try {
-    await downloadVideo(rawUrl, rawPath);
-    await normalizeFiveSeconds(rawPath, audioPath, finalPath);
-  } finally {
-    await fs.rm(rawPath, { force: true }).catch(() => {});
-  }
+    // Free.ai charges the talking-head request by audio duration. Always send at most
+    // the selected 5-second clip so a long narration cannot unexpectedly consume
+    // a large token balance. The final MP4 uses this same bounded audio track.
+    await trimAudioToFiveSeconds(audioPath, trimmedAudioPath);
 
-  return {
-    outputUrl: `/free-image-video/${finalName}`,
-    detail: 'Vídeo hablado de 5 s generado con Free.ai, con la narración sincronizada y sin ZeroGPU de Hugging Face.',
-  };
+    const image = await fs.readFile(imagePath);
+    const audio = await fs.readFile(trimmedAudioPath);
+    const form = new FormData();
+    form.append('image', new Blob([image], { type: mimeType(imagePath, 'image/jpeg') }), path.basename(imagePath));
+    form.append('audio', new Blob([audio], { type: 'audio/mp4' }), path.basename(trimmedAudioPath));
+
+    const response = await fetch(ENDPOINT, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${API_KEY}` },
+      body: form,
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      const message = describeValue(data?.error) || describeValue(data?.message) || describeValue(data?.detail) || describeValue(data);
+      throw new Error(message ? `Free.ai rechazó la generación: ${message}` : `Free.ai rechazó la generación (HTTP ${response.status}).`);
+    }
+
+    const rawUrl = pickVideoUrl(data);
+    if (!rawUrl) throw new Error(`Free.ai no devolvió una URL de vídeo. Respuesta: ${describeValue(data).slice(0, 1600)}`);
+
+    const rawPath = path.join(outputDir, `${randomUUID()}-raw.mp4`);
+    const finalName = `${randomUUID()}.mp4`;
+    const finalPath = path.join(outputDir, finalName);
+    try {
+      await downloadVideo(rawUrl, rawPath);
+      await normalizeFiveSeconds(rawPath, trimmedAudioPath, finalPath);
+    } finally {
+      await fs.rm(rawPath, { force: true }).catch(() => {});
+    }
+
+    return {
+      outputUrl: `/free-image-video/${finalName}`,
+      detail: 'Vídeo hablado de 5 s generado con Free.ai, con la narración sincronizada y audio limitado a 5 s para proteger los créditos.',
+    };
+  } finally {
+    await fs.rm(trimmedAudioPath, { force: true }).catch(() => {});
+  }
 }
