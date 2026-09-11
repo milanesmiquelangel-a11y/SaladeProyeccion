@@ -27,11 +27,11 @@ function pickVideoValue(value) {
   return '';
 }
 
-function describeError(error) {
+function describeError(error, context = '') {
   const message = error?.message || String(error || 'Error desconocido');
   const cause = error?.cause?.message ? ` (${error.cause.message})` : '';
   const status = error?.status ? ` [HTTP ${error.status}]` : '';
-  return `${message}${cause}${status}`;
+  return `${context ? `${context}: ` : ''}${message}${cause}${status}`;
 }
 
 function runFfmpeg(args) {
@@ -104,55 +104,81 @@ async function saveVideoResult(value) {
 
 export async function generateFreeWanImageVideo({ imagePath, prompt }) {
   let normalizedImagePath = '';
+  let lastSpaceStatus = '';
   try {
     if (!HF_TOKEN) {
       throw new Error('Hugging Face requiere autenticación para usar la cuota ZeroGPU. Configura HF_TOKEN en Render con un token personal de Hugging Face (permiso Read).');
     }
 
     const request = parsePrompt(prompt);
-    // @gradio/client expects the Hugging Face token under the `hf_token` option.
-    const app = await Client.connect(WAN_SPACE, { hf_token: HF_TOKEN });
 
-    const api = await app.view_api();
-    if (!api?.named_endpoints?.[WAN_ENDPOINT]) {
-      throw new Error(`El Space ${WAN_SPACE} no expone actualmente ${WAN_ENDPOINT}.`);
+    try {
+      // @gradio/client 2.5.1 uses the `token` client option for the Bearer token.
+      // `hf_token` is used by some other Gradio client/documentation versions.
+      const app = await Client.connect(WAN_SPACE, {
+        token: HF_TOKEN,
+        status_callback: (status) => {
+          if (status?.message) lastSpaceStatus = String(status.message).trim();
+          else if (status?.detail) lastSpaceStatus = String(status.detail).trim();
+        }
+      });
+
+      let api;
+      try {
+        api = await app.view_api();
+      } catch (error) {
+        const statusDetail = lastSpaceStatus ? ` Estado del Space: ${lastSpaceStatus}.` : '';
+        throw new Error(`${describeError(error, 'No se pudo consultar la API de Wan')}${statusDetail}`);
+      }
+
+      if (!api?.named_endpoints?.[WAN_ENDPOINT]) {
+        const available = Object.keys(api?.named_endpoints || {}).join(', ');
+        throw new Error(`El Space ${WAN_SPACE} no expone ${WAN_ENDPOINT}. Endpoints encontrados: ${available || 'ninguno'}.`);
+      }
+
+      normalizedImagePath = await normalizeReferenceImage(imagePath);
+      const referenceImage = handle_file(normalizedImagePath);
+      const animationPrompt = [
+        'Photorealistic adult person animation.',
+        'Preserve the exact person shown in the reference image, including face, hair, clothing, body proportions and scene.',
+        'Do not create a different person, change clothing, redesign the body or change the background.',
+        'Very subtle natural motion only: gentle breathing, realistic blinking when a face is visible, and a tiny natural head movement when appropriate.',
+        'Stable identity, realistic anatomy, no morphing, no duplicate person, no face distortion, no camera movement.',
+        request.motion
+      ].filter(Boolean).join(' ');
+
+      try {
+        const result = await app.predict(WAN_ENDPOINT, [
+          referenceImage,
+          animationPrompt.slice(0, 4000),
+          320,
+          576,
+          'distorted face, identity drift, morphing, extra people, duplicate body parts, deformed hands, cartoon, CGI, low resolution, blurry, pixelated, text, watermark',
+          2,
+          1,
+          4,
+          42,
+          false
+        ]);
+
+        const data = Array.isArray(result?.data) ? result.data : result?.data ? [result.data] : [];
+        const output = data.find((item) => pickVideoValue(item)) || data[0];
+        const outputUrl = await saveVideoResult(output);
+
+        return {
+          outputUrl,
+          provider: `Wan2.1 I2V Fast (${WAN_SPACE})`,
+          detail: request.audioText
+            ? 'Vídeo generado con Wan2.1 I2V Fast; la narración se añadirá en una sola etapa.'
+            : 'Vídeo generado con Wan2.1 I2V Fast y CausVid; clip final de 5 segundos.'
+        };
+      } catch (error) {
+        const statusDetail = lastSpaceStatus ? ` Estado del Space: ${lastSpaceStatus}.` : '';
+        throw new Error(`${describeError(error, `La generación ${WAN_ENDPOINT} falló`)}${statusDetail}`);
+      }
+    } catch (error) {
+      throw new Error(describeError(error, 'Wan'));
     }
-
-    normalizedImagePath = await normalizeReferenceImage(imagePath);
-    const referenceImage = handle_file(normalizedImagePath);
-    const animationPrompt = [
-      'Photorealistic adult person animation.',
-      'Preserve the exact person shown in the reference image, including face, hair, clothing, body proportions and scene.',
-      'Do not create a different person, change clothing, redesign the body or change the background.',
-      'Very subtle natural motion only: gentle breathing, realistic blinking when a face is visible, and a tiny natural head movement when appropriate.',
-      'Stable identity, realistic anatomy, no morphing, no duplicate person, no face distortion, no camera movement.',
-      request.motion
-    ].filter(Boolean).join(' ');
-
-    const result = await app.predict(WAN_ENDPOINT, [
-      referenceImage,
-      animationPrompt.slice(0, 4000),
-      320,
-      576,
-      'distorted face, identity drift, morphing, extra people, duplicate body parts, deformed hands, cartoon, CGI, low resolution, blurry, pixelated, text, watermark',
-      2,
-      1,
-      4,
-      42,
-      false
-    ]);
-
-    const data = Array.isArray(result?.data) ? result.data : result?.data ? [result.data] : [];
-    const output = data.find((item) => pickVideoValue(item)) || data[0];
-    const outputUrl = await saveVideoResult(output);
-
-    return {
-      outputUrl,
-      provider: `Wan2.1 I2V Fast (${WAN_SPACE})`,
-      detail: request.audioText
-        ? `Vídeo generado con Wan2.1 I2V Fast; la narración se añadirá en una sola etapa.`
-        : 'Vídeo generado con Wan2.1 I2V Fast y CausVid; clip final de 5 segundos.'
-    };
   } catch (error) {
     throw new Error(`Wan I2V no pudo generar el vídeo: ${describeError(error)}`);
   } finally {
