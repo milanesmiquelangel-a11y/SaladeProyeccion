@@ -4,7 +4,6 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawn } from 'node:child_process';
 import ffmpegPath from 'ffmpeg-static';
-import { generateNarrationAudio } from './audio-narration.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const publicDir = path.join(__dirname, '..', 'public');
@@ -61,21 +60,15 @@ async function normalizeReferenceImage(imagePath) {
   return output;
 }
 
-function parsePrompt(value) {
+function parseMotion(value) {
   try {
     const parsed = JSON.parse(String(value || ''));
-    if (parsed && typeof parsed === 'object') {
-      return {
-        motion: String(parsed.motion || '').trim(),
-        audioText: String(parsed.audioText || '').trim(),
-        audioLanguage: String(parsed.audioLanguage || 'en').trim()
-      };
-    }
+    if (parsed && typeof parsed === 'object') return String(parsed.motion || '').trim();
   } catch {}
-  return { motion: String(value || '').trim(), audioText: '', audioLanguage: 'en' };
+  return String(value || '').trim();
 }
 
-async function saveVideoResult(value, audioText = '', audioLanguage = 'en') {
+async function saveVideoResult(value) {
   const videoValue = pickVideoValue(value);
   if (!videoValue) throw new Error('Wan2.1 terminó sin devolver el vídeo generado.');
   await fs.mkdir(freeOutputDir, { recursive: true });
@@ -92,33 +85,16 @@ async function saveVideoResult(value, audioText = '', audioLanguage = 'en') {
     await fs.copyFile(videoValue, rawDestination);
   }
 
-  let audioPath = '';
   try {
-    if (String(audioText || '').trim()) {
-      const audio = await generateNarrationAudio({ text: audioText, language: audioLanguage });
-      audioPath = audio?.path || '';
-      if (!audioPath) throw new Error('El servicio de voz no devolvió una pista de audio.');
-    }
-
-    if (audioPath) {
-      await runFfmpeg([
-        '-y', '-i', rawDestination, '-i', audioPath,
-        '-filter_complex', '[1:a]apad[a]',
-        '-map', '0:v:0', '-map', '[a]',
-        '-vf', 'setpts=2.5*PTS', '-t', '5',
-        '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '18', '-pix_fmt', 'yuv420p',
-        '-c:a', 'aac', '-b:a', '128k', '-movflags', '+faststart', destination
-      ]);
-    } else {
-      await runFfmpeg([
-        '-y', '-i', rawDestination, '-vf', 'setpts=2.5*PTS', '-t', '5', '-an',
-        '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '18', '-pix_fmt', 'yuv420p',
-        '-movflags', '+faststart', destination
-      ]);
-    }
+    // Wan2.1 Fast returns a short AI motion clip. Slow it to a continuous 5-second
+    // final video. Audio, when requested, is added by image-video-entry.js.
+    await runFfmpeg([
+      '-y', '-i', rawDestination, '-vf', 'setpts=2.5*PTS', '-t', '5', '-an',
+      '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '18', '-pix_fmt', 'yuv420p',
+      '-movflags', '+faststart', destination
+    ]);
   } finally {
     await fs.rm(rawDestination, { force: true }).catch(() => {});
-    if (audioPath) await fs.rm(audioPath, { force: true }).catch(() => {});
   }
   return `/free-image-video/${filename}`;
 }
@@ -127,7 +103,7 @@ export async function generateFreeWanImageVideo({ imagePath, prompt }) {
   let normalizedImagePath = '';
   try {
     if (!HF_TOKEN) throw new Error('Hugging Face requiere autenticación. Configura HF_TOKEN en Render con un token personal de Hugging Face (permiso Read).');
-    const request = parsePrompt(prompt);
+    const motion = parseMotion(prompt);
     const app = await Client.connect(VIDEO_SPACE, { token: HF_TOKEN });
     const api = await app.view_api();
     if (!api?.named_endpoints?.[VIDEO_ENDPOINT]) {
@@ -143,7 +119,7 @@ export async function generateFreeWanImageVideo({ imagePath, prompt }) {
       'Do not create a different person, change clothing, redesign the body or change the background.',
       'Very subtle natural motion only: gentle breathing, realistic blinking when a face is visible, and a tiny natural head movement when appropriate.',
       'Stable identity, realistic anatomy, no morphing, no duplicate person, no face distortion, no camera movement.',
-      request.motion
+      motion
     ].filter(Boolean).join(' ');
 
     const result = await app.predict(VIDEO_ENDPOINT, [
@@ -161,13 +137,11 @@ export async function generateFreeWanImageVideo({ imagePath, prompt }) {
 
     const data = Array.isArray(result?.data) ? result.data : result?.data ? [result.data] : [];
     const output = data.find((item) => pickVideoValue(item)) || data[0];
-    const outputUrl = await saveVideoResult(output, request.audioText, request.audioLanguage);
+    const outputUrl = await saveVideoResult(output);
     return {
       outputUrl,
       provider: `Wan2.1 I2V Fast (${VIDEO_SPACE})`,
-      detail: request.audioText
-        ? 'Vídeo generado con Wan2.1 I2V Fast y narración añadida al MP4 final.'
-        : 'Vídeo generado con Wan2.1 I2V Fast y CausVid en 2 s de movimiento, convertido después a un clip final continuo de 5 s.'
+      detail: 'Vídeo generado con Wan2.1 I2V Fast y CausVid en 2 s de movimiento, convertido después a un clip final continuo de 5 s.'
     };
   } catch (error) {
     throw new Error(`Wan2.1 no pudo generar el vídeo: ${describeError(error)}`);
