@@ -1,6 +1,6 @@
 {
   "name": "sala-de-proyeccion",
-  "version": "0.6.0",
+  "version": "0.5.1",
   "private": true,
   "description": "Backend Node/Express para Sala de Proyección con generación y montaje de vídeo IA.",
   "type": "module",
@@ -19,7 +19,6 @@
     "dotenv": "^16.4.7",
     "express": "^4.21.2",
     "ffmpeg-static": "^5.2.0",
-    "node-edge-tts": "^1.2.10",
     "pg": "^8.16.3"
   }
 }
