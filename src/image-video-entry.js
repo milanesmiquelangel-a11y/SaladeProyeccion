@@ -6,6 +6,7 @@ import { randomUUID } from 'node:crypto';
 import { finalizeGeneration, refundGeneration } from './billing-ledger.js';
 import { generateFreeWanImageVideo } from './free-wan-image-video.js';
 import { generateFreeSadTalkerVideo } from './free-sadtalker.js';
+import { generateFreeAITalkingHead } from './free-freeai-talking-head.js';
 import { generateLivePortraitVideo } from './free-liveportrait.js';
 import { generateSpeechAudio, muxAudioIntoVideo, normalizeAudioLanguage } from './audio-tts.js';
 
@@ -18,7 +19,7 @@ const PIXAZO_IMAGE_VIDEO_URL = process.env.PIXAZO_IMAGE_VIDEO_URL || 'https://ga
 const PIXAZO_STATUS_URL = 'https://gateway.pixazo.ai/v2/requests/status';
 const IMAGE_TIMEOUT_MS = 20 * 60 * 1000;
 const imageJobs = new Map();
-const IMAGE_VIDEO_ENGINE = String(process.env.IMAGE_VIDEO_ENGINE || 'sadtalker').toLowerCase();
+const IMAGE_VIDEO_ENGINE = String(process.env.IMAGE_VIDEO_ENGINE || 'freeai').toLowerCase();
 const nativeListen = express.application.listen;
 
 function absolutePublicUrl(req, relativePath) {
@@ -120,12 +121,12 @@ async function runTalkingImageJob(job) {
     }
 
     job.providerState = 'GENERATING_AUDIO';
-    job.detail = `Preparando audio hablado ${normalizeAudioLanguage(job.audioLanguage)} para sincronizar la boca…`;
+    job.detail = `Preparando audio hablado ${normalizeAudioLanguage(job.audioLanguage)}…`;
     audioPath = await generateSpeechAudio({ text: job.audioText, language: job.audioLanguage, outputDir: audioDir });
 
-    job.providerState = 'SADTALKER';
-    job.detail = 'Animando la fotografía con SadTalker: sincronizando boca, expresiones y cabeza con la voz…';
-    const result = await generateFreeSadTalkerVideo({ imagePath: job.imagePath, audioPath });
+    job.providerState = 'FREEAI_SADTALKER';
+    job.detail = 'Generando persona hablante con Free.ai/SadTalker (sin ZeroGPU de Hugging Face)…';
+    const result = await generateFreeAITalkingHead({ imagePath: job.imagePath, audioPath });
     if (job.status === 'CANCELLED') return;
     job.outputUrl = result.outputUrl;
     job.providerState = 'COMPLETED';
@@ -163,7 +164,7 @@ function mountImageRoutes(app) {
         prompt: body.prompt, audioText: String(body.audioText || '').trim().slice(0, 4000), audioLanguage: normalizeAudioLanguage(body.audioLanguage)
       };
       imageJobs.set(jobId, job);
-      if (IMAGE_VIDEO_ENGINE === 'sadtalker' || IMAGE_VIDEO_ENGINE === 'talking-head' || IMAGE_VIDEO_ENGINE === 'ltx-2-3' || IMAGE_VIDEO_ENGINE === 'ltx' || IMAGE_VIDEO_ENGINE === 'auto' || IMAGE_VIDEO_ENGINE === 'wan-free') {
+      if (IMAGE_VIDEO_ENGINE === 'freeai' || IMAGE_VIDEO_ENGINE === 'sadtalker' || IMAGE_VIDEO_ENGINE === 'talking-head' || IMAGE_VIDEO_ENGINE === 'ltx-2-3' || IMAGE_VIDEO_ENGINE === 'ltx' || IMAGE_VIDEO_ENGINE === 'auto' || IMAGE_VIDEO_ENGINE === 'wan-free') {
         runTalkingImageJob(job).catch((error) => { job.status = 'ERROR'; job.providerState = 'ERROR'; job.detail = error.message || 'No se pudo completar la generación.'; });
       } else {
         const requestId = await submitImageVideo(req, body);
