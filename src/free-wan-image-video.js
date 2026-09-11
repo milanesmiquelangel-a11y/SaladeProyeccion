@@ -31,7 +31,8 @@ function describeError(error, context = '') {
   const message = error?.message || String(error || 'Error desconocido');
   const cause = error?.cause?.message ? ` (${error.cause.message})` : '';
   const status = error?.status ? ` [HTTP ${error.status}]` : '';
-  return `${context ? `${context}: ` : ''}${message}${cause}${status}`;
+  const code = error?.code ? ` [${error.code}]` : '';
+  return `${context ? `${context}: ` : ''}${message}${cause}${code}${status}`;
 }
 
 function runFfmpeg(args) {
@@ -102,6 +103,20 @@ async function saveVideoResult(value) {
   return `/free-image-video/${filename}`;
 }
 
+function formatWanStatus(status) {
+  if (!status) return '';
+  const parts = [
+    status.stage,
+    status.code,
+    status.message,
+    status.detail,
+    status.queue ? `queue=${status.queue}` : '',
+    Number.isFinite(status.position) ? `position=${status.position}` : '',
+    Number.isFinite(status.eta) ? `eta=${status.eta}s` : ''
+  ].filter(Boolean);
+  return parts.join(' | ');
+}
+
 export async function generateFreeWanImageVideo({ imagePath, prompt }) {
   let normalizedImagePath = '';
   let lastSpaceError = '';
@@ -112,16 +127,16 @@ export async function generateFreeWanImageVideo({ imagePath, prompt }) {
 
     const request = parsePrompt(prompt);
 
-    // @gradio/client 2.5.1 uses the `token` option for the Hugging Face Bearer token.
-    // IMPORTANT: a normal `RUNNING / Space is running` status is not an error and must
-    // never be appended to a generation error. We only capture actual Space errors.
+    // @gradio/client uses the `token` option for the Hugging Face Bearer token.
+    // Ask for status events so queued/runtime failures are visible to our server.
     const app = await Client.connect(WAN_SPACE, {
       token: HF_TOKEN,
+      events: ['data', 'status'],
       status_callback: (status) => {
         const state = String(status?.status || '').toLowerCase();
         const detail = String(status?.detail || '').toUpperCase();
         if (state === 'space_error' || state === 'error' || state === 'paused' || detail === 'RUNTIME_ERROR' || detail === 'BUILD_ERROR' || detail === 'CONFIG_ERROR' || detail === 'NO_APP_FILE' || detail === 'PAUSED') {
-          lastSpaceError = [status?.message, status?.detail].filter(Boolean).join(' — ');
+          lastSpaceError = formatWanStatus(status);
         }
       }
     });
@@ -154,7 +169,7 @@ export async function generateFreeWanImageVideo({ imagePath, prompt }) {
       // Wan Fast is intentionally called with 2 seconds / 48 frames at 24 FPS.
       // The application stretches that generated clip to the final 5-second MP4 afterwards.
       // This prevents the remote Space from ever receiving a 5-second/long request.
-      const result = await app.predict(WAN_ENDPOINT, [
+      const submission = app.submit(WAN_ENDPOINT, [
         referenceImage,
         animationPrompt.slice(0, 4000),
         320,
@@ -167,7 +182,41 @@ export async function generateFreeWanImageVideo({ imagePath, prompt }) {
         false
       ]);
 
-      const data = Array.isArray(result?.data) ? result.data : result?.data ? [result.data] : [];
+      let outputData = null;
+      let terminalStatus = null;
+      const startedAt = Date.now();
+      const maxWaitMs = 18 * 60 * 1000;
+
+      for await (const message of submission) {
+        if (message?.type === 'data') {
+          outputData = message.data;
+          continue;
+        }
+
+        if (message?.type === 'status') {
+          const stage = String(message.stage || '').toLowerCase();
+          const text = formatWanStatus(message);
+          if (stage === 'error' || message?.success === false) {
+            terminalStatus = message;
+            lastSpaceError = text || lastSpaceError || 'Wan devolvió un error sin detalles adicionales.';
+            // Stop consuming immediately on terminal error. Some published
+            // Gradio JS clients report the error event but may not close the iterator.
+            break;
+          }
+        }
+
+        if (Date.now() - startedAt > maxWaitMs) {
+          try { submission.return?.(); } catch {}
+          throw new Error('Tiempo de espera agotado mientras Wan procesaba la generación.');
+        }
+      }
+
+      if (terminalStatus || lastSpaceError) {
+        const detail = lastSpaceError || formatWanStatus(terminalStatus);
+        throw new Error(`Wan devolvió un error durante /generate_video${detail ? `: ${detail}` : '.'}`);
+      }
+
+      const data = Array.isArray(outputData) ? outputData : outputData ? [outputData] : [];
       const output = data.find((item) => pickVideoValue(item)) || data[0];
       const outputUrl = await saveVideoResult(output);
 
