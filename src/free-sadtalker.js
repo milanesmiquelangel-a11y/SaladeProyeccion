@@ -56,6 +56,7 @@ async function trimAudioToFiveSeconds(audioPath) {
   await fs.mkdir(outputDir, { recursive: true });
   await runFfmpeg([
     '-y', '-i', audioPath,
+    '-af', `apad=pad_dur=${FINAL_DURATION_SECONDS}`,
     '-t', String(FINAL_DURATION_SECONDS),
     '-ac', '1',
     '-ar', '16000',
