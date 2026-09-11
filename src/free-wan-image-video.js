@@ -104,7 +104,7 @@ async function saveVideoResult(value) {
 
 export async function generateFreeWanImageVideo({ imagePath, prompt }) {
   let normalizedImagePath = '';
-  let lastSpaceStatus = '';
+  let lastSpaceError = '';
   try {
     if (!HF_TOKEN) {
       throw new Error('Hugging Face requiere autenticación para usar la cuota ZeroGPU. Configura HF_TOKEN en Render con un token personal de Hugging Face (permiso Read).');
@@ -112,72 +112,75 @@ export async function generateFreeWanImageVideo({ imagePath, prompt }) {
 
     const request = parsePrompt(prompt);
 
-    try {
-      // @gradio/client 2.5.1 uses the `token` client option for the Bearer token.
-      // `hf_token` is used by some other Gradio client/documentation versions.
-      const app = await Client.connect(WAN_SPACE, {
-        token: HF_TOKEN,
-        status_callback: (status) => {
-          if (status?.message) lastSpaceStatus = String(status.message).trim();
-          else if (status?.detail) lastSpaceStatus = String(status.detail).trim();
+    // @gradio/client 2.5.1 uses the `token` option for the Hugging Face Bearer token.
+    // IMPORTANT: a normal `RUNNING / Space is running` status is not an error and must
+    // never be appended to a generation error. We only capture actual Space errors.
+    const app = await Client.connect(WAN_SPACE, {
+      token: HF_TOKEN,
+      status_callback: (status) => {
+        const state = String(status?.status || '').toLowerCase();
+        const detail = String(status?.detail || '').toUpperCase();
+        if (state === 'space_error' || state === 'error' || state === 'paused' || detail === 'RUNTIME_ERROR' || detail === 'BUILD_ERROR' || detail === 'CONFIG_ERROR' || detail === 'NO_APP_FILE' || detail === 'PAUSED') {
+          lastSpaceError = [status?.message, status?.detail].filter(Boolean).join(' — ');
         }
-      });
-
-      let api;
-      try {
-        api = await app.view_api();
-      } catch (error) {
-        const statusDetail = lastSpaceStatus ? ` Estado del Space: ${lastSpaceStatus}.` : '';
-        throw new Error(`${describeError(error, 'No se pudo consultar la API de Wan')}${statusDetail}`);
       }
+    });
 
-      if (!api?.named_endpoints?.[WAN_ENDPOINT]) {
-        const available = Object.keys(api?.named_endpoints || {}).join(', ');
-        throw new Error(`El Space ${WAN_SPACE} no expone ${WAN_ENDPOINT}. Endpoints encontrados: ${available || 'ninguno'}.`);
-      }
-
-      normalizedImagePath = await normalizeReferenceImage(imagePath);
-      const referenceImage = handle_file(normalizedImagePath);
-      const animationPrompt = [
-        'Photorealistic adult person animation.',
-        'Preserve the exact person shown in the reference image, including face, hair, clothing, body proportions and scene.',
-        'Do not create a different person, change clothing, redesign the body or change the background.',
-        'Very subtle natural motion only: gentle breathing, realistic blinking when a face is visible, and a tiny natural head movement when appropriate.',
-        'Stable identity, realistic anatomy, no morphing, no duplicate person, no face distortion, no camera movement.',
-        request.motion
-      ].filter(Boolean).join(' ');
-
-      try {
-        const result = await app.predict(WAN_ENDPOINT, [
-          referenceImage,
-          animationPrompt.slice(0, 4000),
-          320,
-          576,
-          'distorted face, identity drift, morphing, extra people, duplicate body parts, deformed hands, cartoon, CGI, low resolution, blurry, pixelated, text, watermark',
-          2,
-          1,
-          4,
-          42,
-          false
-        ]);
-
-        const data = Array.isArray(result?.data) ? result.data : result?.data ? [result.data] : [];
-        const output = data.find((item) => pickVideoValue(item)) || data[0];
-        const outputUrl = await saveVideoResult(output);
-
-        return {
-          outputUrl,
-          provider: `Wan2.1 I2V Fast (${WAN_SPACE})`,
-          detail: request.audioText
-            ? 'Vídeo generado con Wan2.1 I2V Fast; la narración se añadirá en una sola etapa.'
-            : 'Vídeo generado con Wan2.1 I2V Fast y CausVid; clip final de 5 segundos.'
-        };
-      } catch (error) {
-        const statusDetail = lastSpaceStatus ? ` Estado del Space: ${lastSpaceStatus}.` : '';
-        throw new Error(`${describeError(error, `La generación ${WAN_ENDPOINT} falló`)}${statusDetail}`);
-      }
+    let api;
+    try {
+      api = await app.view_api();
     } catch (error) {
-      throw new Error(describeError(error, 'Wan'));
+      const statusDetail = lastSpaceError ? ` Estado real del Space: ${lastSpaceError}.` : '';
+      throw new Error(`${describeError(error, 'No se pudo consultar la API de Wan')}${statusDetail}`);
+    }
+
+    if (!api?.named_endpoints?.[WAN_ENDPOINT]) {
+      const available = Object.keys(api?.named_endpoints || {}).join(', ');
+      throw new Error(`El Space ${WAN_SPACE} no expone ${WAN_ENDPOINT}. Endpoints encontrados: ${available || 'ninguno'}.`);
+    }
+
+    normalizedImagePath = await normalizeReferenceImage(imagePath);
+    const referenceImage = handle_file(normalizedImagePath);
+    const animationPrompt = [
+      'Photorealistic adult person animation.',
+      'Preserve the exact person shown in the reference image, including face, hair, clothing, body proportions and scene.',
+      'Do not create a different person, change clothing, redesign the body or change the background.',
+      'Very subtle natural motion only: gentle breathing, realistic blinking when a face is visible, and a tiny natural head movement when appropriate.',
+      'Stable identity, realistic anatomy, no morphing, no duplicate person, no face distortion, no camera movement.',
+      request.motion
+    ].filter(Boolean).join(' ');
+
+    try {
+      // Wan Fast is intentionally called with 2 seconds / 48 frames at 24 FPS.
+      // The application stretches that generated clip to the final 5-second MP4 afterwards.
+      // This prevents the remote Space from ever receiving a 5-second/long request.
+      const result = await app.predict(WAN_ENDPOINT, [
+        referenceImage,
+        animationPrompt.slice(0, 4000),
+        320,
+        576,
+        'distorted face, identity drift, morphing, extra people, duplicate body parts, deformed hands, cartoon, CGI, low resolution, blurry, pixelated, text, watermark',
+        2,
+        1,
+        4,
+        42,
+        false
+      ]);
+
+      const data = Array.isArray(result?.data) ? result.data : result?.data ? [result.data] : [];
+      const output = data.find((item) => pickVideoValue(item)) || data[0];
+      const outputUrl = await saveVideoResult(output);
+
+      return {
+        outputUrl,
+        provider: `Wan2.1 I2V Fast (${WAN_SPACE})`,
+        detail: request.audioText
+          ? 'Vídeo generado con Wan2.1 I2V Fast; la narración se añadirá en una sola etapa.'
+          : 'Vídeo generado con Wan2.1 I2V Fast y CausVid; clip final de 5 segundos.'
+      };
+    } catch (error) {
+      const statusDetail = lastSpaceError ? ` Estado real del Space: ${lastSpaceError}.` : '';
+      throw new Error(`${describeError(error, `La generación ${WAN_ENDPOINT} falló`)}${statusDetail}`);
     }
   } catch (error) {
     throw new Error(`Wan I2V no pudo generar el vídeo: ${describeError(error)}`);
