@@ -1,20 +1,19 @@
 import { Client, handle_file } from '@gradio/client';
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
-import { spawn } from 'node:child_process';
-import ffmpegPath from 'ffmpeg-static';
-import { generateSpeech } from './audio-service.js';
-import { attachGeneratedAudio } from './patch-audio-mux.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const publicDir = path.join(__dirname, '..', 'public');
 const freeOutputDir = path.join(publicDir, 'free-image-video');
-const freeTempDir = path.join(publicDir, 'free-image-video', 'tmp');
 const generatedAudioDir = path.join(publicDir, 'generated-audio');
-const WAN_SPACE = process.env.WAN_FREE_SPACE || 'multimodalart/wan2-1-fast';
-const WAN_ENDPOINT = process.env.WAN_FREE_ENDPOINT || '/generate_video';
+
+const VIDEO_SPACE = process.env.WAN_FREE_SPACE || 'Lightricks/ltx-2-distilled';
+const VIDEO_ENDPOINT = process.env.WAN_FREE_ENDPOINT || '/generate_video';
 const HF_TOKEN = String(process.env.HF_TOKEN || process.env.HUGGINGFACE_TOKEN || '').trim();
+
+function fileURLToPath(url) {
+  return new URL(url).pathname;
+}
 
 function pickVideoValue(value) {
   if (!value) return '';
@@ -24,37 +23,37 @@ function pickVideoValue(value) {
       const picked = pickVideoValue(item);
       if (picked) return picked;
     }
-    return '';
   }
   if (typeof value === 'object') return value.url || value.path || value.video?.url || value.video?.path || '';
   return '';
 }
 
-function describeError(error, context = '') {
+function describeError(error) {
   const message = error?.message || String(error || 'Error desconocido');
   const cause = error?.cause?.message ? ` (${error.cause.message})` : '';
-  const status = error?.status ? ` [HTTP ${error.status}]` : '';
-  const code = error?.code ? ` [${error.code}]` : '';
-  return `${context ? `${context}: ` : ''}${message}${cause}${code}${status}`;
+  return `${message}${cause}`;
 }
 
-function runFfmpeg(args) {
-  return new Promise((resolve, reject) => {
-    if (!ffmpegPath) return reject(new Error('FFmpeg no está disponible en el servidor.'));
-    const child = spawn(ffmpegPath, args, { stdio: ['ignore', 'ignore', 'pipe'] });
-    let stderr = '';
-    child.stderr.on('data', (chunk) => { stderr += chunk.toString(); });
-    child.on('error', reject);
-    child.on('close', (code) => code === 0
-      ? resolve()
-      : reject(new Error(`FFmpeg terminó con código ${code}: ${stderr.slice(-800)}`)));
-  });
+async function saveVideoResult(value) {
+  const videoValue = pickVideoValue(value);
+  if (!videoValue) throw new Error('LTX-2 terminó sin devolver el vídeo generado.');
+  await fs.mkdir(freeOutputDir, { recursive: true });
+  const filename = `ltx-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.mp4`;
+  const destination = path.join(freeOutputDir, filename);
+  if (videoValue.startsWith('http://') || videoValue.startsWith('https://')) {
+    const response = await fetch(videoValue);
+    if (!response.ok) throw new Error(`No se pudo descargar el vídeo generado (HTTP ${response.status}).`);
+    await fs.writeFile(destination, Buffer.from(await response.arrayBuffer()));
+  } else {
+    await fs.copyFile(videoValue, destination);
+  }
+  return `/free-image-video/${filename}`;
 }
 
 function parsePrompt(value) {
   try {
     const parsed = JSON.parse(String(value || ''));
-    if (parsed && typeof parsed === 'object' && ('motion' in parsed || 'audioText' in parsed)) {
+    if (parsed && typeof parsed === 'object') {
       return {
         motion: String(parsed.motion || '').trim(),
         audioText: String(parsed.audioText || '').trim().slice(0, 4000),
@@ -65,214 +64,56 @@ function parsePrompt(value) {
   return { motion: String(value || '').trim(), audioText: '', audioLanguage: 'en' };
 }
 
-async function normalizeReferenceImage(imagePath) {
-  await fs.mkdir(freeTempDir, { recursive: true });
-  const output = path.join(freeTempDir, `ref-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.jpg`);
-  await runFfmpeg([
-    '-y', '-loop', '1', '-i', imagePath, '-frames:v', '1',
-    '-filter_complex',
-    '[0:v]scale=576:320:force_original_aspect_ratio=increase,crop=576:320,gblur=sigma=18[bg];[0:v]scale=576:320:force_original_aspect_ratio=decrease[fg];[bg][fg]overlay=(W-w)/2:(H-h)/2,format=yuv420p[out]',
-    '-map', '[out]', '-q:v', '2', output
-  ]);
-  return output;
-}
-
-async function saveVideoResult(value) {
-  const videoValue = pickVideoValue(value);
-  if (!videoValue) throw new Error('El motor de vídeo terminó sin devolver el vídeo generado.');
-
-  await fs.mkdir(freeOutputDir, { recursive: true });
-  await fs.mkdir(freeTempDir, { recursive: true });
-  const filename = `wan-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.mp4`;
-  const rawDestination = path.join(freeTempDir, filename);
-  const destination = path.join(freeOutputDir, filename);
-
-  if (videoValue.startsWith('http://') || videoValue.startsWith('https://')) {
-    const response = await fetch(videoValue);
-    if (!response.ok) throw new Error(`No se pudo descargar el vídeo generado (HTTP ${response.status}).`);
-    await fs.writeFile(rawDestination, Buffer.from(await response.arrayBuffer()));
-  } else {
-    await fs.copyFile(videoValue, rawDestination);
-  }
-
-  await runFfmpeg([
-    '-y', '-i', rawDestination,
-    '-vf', 'setpts=2.5*PTS', '-t', '5', '-an',
-    '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '18', '-pix_fmt', 'yuv420p',
-    '-movflags', '+faststart', destination
-  ]);
-
-  await fs.rm(rawDestination, { force: true }).catch(() => {});
-  return `/free-image-video/${filename}`;
-}
-
-async function addNarration(outputUrl, audioText, audioLanguage) {
-  const cleanText = String(audioText || '').trim();
-  if (!cleanText) return { outputUrl, detail: '' };
-
-  const sourceVideoName = path.basename(String(outputUrl).split('?')[0]);
-  const sourceVideoPath = path.join(freeOutputDir, sourceVideoName);
-  const audioResult = await generateSpeech({ text: cleanText, language: audioLanguage, outputDir: generatedAudioDir });
-  const voiceName = `${path.parse(sourceVideoName).name}-voice.mp4`;
-  const voicePath = path.join(freeOutputDir, voiceName);
-
-  try {
-    await attachGeneratedAudio({
-      videoPath: sourceVideoPath,
-      audioPath: audioResult.filePath,
-      outputPath: voicePath,
-      durationSeconds: 5
-    });
-  } finally {
-    await fs.rm(audioResult.filePath, { force: true }).catch(() => {});
-  }
-
-  await fs.rm(sourceVideoPath, { force: true }).catch(() => {});
-  return {
-    outputUrl: `/free-image-video/${voiceName}`,
-    detail: `Vídeo generado con Wan2.1 I2V Fast y narración ${audioResult.provider} en ${audioResult.language}.`
-  };
-}
-
-function safeJson(value, max = 1800) {
-  if (value == null) return '';
-  try {
-    const text = JSON.stringify(value);
-    return text.length > max ? `${text.slice(0, max)}…` : text;
-  } catch {
-    return String(value).slice(0, max);
-  }
-}
-
-function formatWanStatus(status) {
-  if (!status) return '';
-  const parts = [
-    status.stage,
-    status.code,
-    status.message,
-    status.detail,
-    status.queue != null ? `queue=${status.queue}` : '',
-    Number.isFinite(status.position) ? `position=${status.position}` : '',
-    Number.isFinite(status.eta) ? `eta=${status.eta}s` : '',
-    status.original_msg ? `original_msg=${safeJson(status.original_msg)}` : ''
-  ].filter(Boolean);
-  return parts.join(' | ');
-}
-
 export async function generateFreeWanImageVideo({ imagePath, prompt }) {
-  let normalizedImagePath = '';
-  let lastSpaceError = '';
   try {
     if (!HF_TOKEN) {
-      throw new Error('Hugging Face requiere autenticación para usar la cuota ZeroGPU. Configura HF_TOKEN en Render con un token personal de Hugging Face (permiso Read).');
+      throw new Error('Hugging Face requiere autenticación. Configura HF_TOKEN en Render con un token personal de Hugging Face (permiso Read).');
     }
 
     const request = parsePrompt(prompt);
-
-    // Node @gradio/client 2.x uses the `token` option for Hugging Face authentication.
-    const app = await Client.connect(WAN_SPACE, {
-      token: HF_TOKEN,
-      events: ['data', 'status'],
-      status_callback: (status) => {
-        const state = String(status?.status || '').toLowerCase();
-        const detail = String(status?.detail || '').toUpperCase();
-        if (state === 'space_error' || state === 'error' || state === 'paused' || detail === 'RUNTIME_ERROR' || detail === 'BUILD_ERROR' || detail === 'CONFIG_ERROR' || detail === 'NO_APP_FILE' || detail === 'PAUSED') {
-          lastSpaceError = formatWanStatus(status);
-        }
-      }
-    });
-
-    let api;
-    try {
-      api = await app.view_api();
-    } catch (error) {
-      const statusDetail = lastSpaceError ? ` Estado real del Space: ${lastSpaceError}.` : '';
-      throw new Error(`${describeError(error, 'No se pudo consultar la API de Wan')}${statusDetail}`);
-    }
-
-    if (!api?.named_endpoints?.[WAN_ENDPOINT]) {
+    const app = await Client.connect(VIDEO_SPACE, { token: HF_TOKEN });
+    const api = await app.view_api();
+    if (!api?.named_endpoints?.[VIDEO_ENDPOINT]) {
       const available = Object.keys(api?.named_endpoints || {}).join(', ');
-      throw new Error(`El Space ${WAN_SPACE} no expone ${WAN_ENDPOINT}. Endpoints encontrados: ${available || 'ninguno'}.`);
+      throw new Error(`El Space ${VIDEO_SPACE} no expone ${VIDEO_ENDPOINT}. Endpoints: ${available || 'ninguno'}.`);
     }
 
-    normalizedImagePath = await normalizeReferenceImage(imagePath);
-    const referenceImage = handle_file(normalizedImagePath);
+    const referenceImage = handle_file(imagePath);
     const animationPrompt = [
-      'Photorealistic adult person animation.',
-      'Preserve the exact person shown in the reference image, including face, hair, clothing, body proportions and scene.',
-      'Do not create a different person, change clothing, redesign the body or change the background.',
-      'Very subtle natural motion only: gentle breathing, realistic blinking when a face is visible, and a tiny natural head movement when appropriate.',
-      'Stable identity, realistic anatomy, no morphing, no duplicate person, no face distortion, no camera movement.',
+      'Photorealistic cinematic image-to-video animation.',
+      'Preserve the exact person in the reference image: same face, identity, hair, clothing, body proportions, skin appearance and background.',
+      'Do not replace or redesign the person. No identity drift, face morphing, duplicate person or anatomical deformation.',
+      'Very subtle natural movement only: gentle breathing, natural blinking when the face is visible, and a small realistic head movement while staying in the same place.',
+      'Stable identity and clothing, realistic anatomy, natural skin, cinematic realism, steady camera.',
+      'Generate subtle synchronized ambient audio appropriate to the scene.',
       request.motion
     ].filter(Boolean).join(' ');
 
-    try {
-      // Wan Fast officially uses 32-pixel multiples. For a 16:9 horizontal image,
-      // 448x832 is the Space's own area-based target family (and its public example
-      // uses 448x832 for landscape/portrait counterpart). Keep the 2-second/48-frame
-      // fast clip and stretch it to the requested final 5-second MP4 afterwards.
-      const submission = app.submit(WAN_ENDPOINT, [
-        referenceImage,
-        animationPrompt.slice(0, 4000),
-        448,
-        832,
-        'distorted face, identity drift, morphing, extra people, duplicate body parts, deformed hands, cartoon, CGI, low resolution, blurry, pixelated, text, watermark',
-        2,
-        1,
-        4,
-        42,
-        false
-      ]);
+    // LTX-2 accepts a reference image and generates video + synchronized audio.
+    // Its public Space supports 1–10 seconds; we use 5 seconds directly.
+    const result = await app.predict(VIDEO_ENDPOINT, [
+      referenceImage,
+      animationPrompt.slice(0, 5000),
+      5,
+      true,
+      42,
+      false,
+      512,
+      768
+    ]);
 
-      let outputData = null;
-      let terminalStatus = null;
-      const startedAt = Date.now();
-      const maxWaitMs = 18 * 60 * 1000;
+    const data = Array.isArray(result?.data) ? result.data : result?.data ? [result.data] : [];
+    const output = data.find((item) => pickVideoValue(item)) || data[0];
+    const outputUrl = await saveVideoResult(output);
 
-      for await (const message of submission) {
-        if (message?.type === 'data') {
-          outputData = message.data;
-          continue;
-        }
-
-        if (message?.type === 'status') {
-          const stage = String(message.stage || '').toLowerCase();
-          const text = formatWanStatus(message);
-          if (stage === 'error' || message?.success === false) {
-            terminalStatus = message;
-            lastSpaceError = text || lastSpaceError || 'Wan devolvió un error sin detalles adicionales.';
-            break;
-          }
-        }
-
-        if (Date.now() - startedAt > maxWaitMs) {
-          try { submission.return?.(); } catch {}
-          throw new Error('Tiempo de espera agotado mientras Wan procesaba la generación.');
-        }
-      }
-
-      if (terminalStatus || lastSpaceError) {
-        const detail = formatWanStatus(terminalStatus) || lastSpaceError || 'sin detalles adicionales';
-        throw new Error(`Wan devolvió un error durante /generate_video: ${detail}`);
-      }
-
-      const data = Array.isArray(outputData) ? outputData : outputData ? [outputData] : [];
-      const output = data.find((item) => pickVideoValue(item)) || data[0];
-      const outputUrl = await saveVideoResult(output);
-      const narrated = await addNarration(outputUrl, request.audioText, request.audioLanguage);
-
-      return {
-        outputUrl: narrated.outputUrl,
-        provider: `Wan2.1 I2V Fast (${WAN_SPACE})`,
-        detail: narrated.detail || 'Vídeo generado con Wan2.1 I2V Fast y CausVid; clip final de 5 segundos.'
-      };
-    } catch (error) {
-      const statusDetail = lastSpaceError ? ` Estado real del Space: ${lastSpaceError}.` : '';
-      throw new Error(`${describeError(error, `La generación ${WAN_ENDPOINT} falló`)}${statusDetail}`);
-    }
+    return {
+      outputUrl,
+      provider: `LTX-2 Distilled (${VIDEO_SPACE})`,
+      detail: request.audioText
+        ? 'Vídeo generado con LTX-2 Distilled con audio nativo sincronizado. La narración solicitada se mantiene disponible para la siguiente capa de mezcla.'
+        : 'Vídeo generado con LTX-2 Distilled desde la fotografía, con movimiento IA y audio nativo sincronizado.'
+    };
   } catch (error) {
-    throw new Error(`Wan I2V no pudo generar el vídeo: ${describeError(error)}`);
-  } finally {
-    if (normalizedImagePath) await fs.rm(normalizedImagePath, { force: true }).catch(() => {});
+    throw new Error(`LTX-2 no pudo generar el vídeo: ${describeError(error)}`);
   }
 }
