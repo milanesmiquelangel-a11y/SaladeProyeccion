@@ -15,10 +15,13 @@ function buildPrompt(userPrompt) {
   const text = extractUserScene(userPrompt);
   return [
     'Generate exactly the scene requested by the user.',
+    'ONE CONTINUOUS TAKE.',
+    'NO CUTS, NO SCENE CHANGES, NO TIME JUMPS, NO LOCATION CHANGES.',
+    'Keep the same main subject, appearance, setting, camera position and visual identity throughout the entire clip.',
     'The main subject, setting, and action described by the user are mandatory.',
     'Do not replace the main subject with another subject.',
     'Do not invent a different story or add unrelated people, animals, vehicles, or objects.',
-    'Keep the same main subject and setting throughout the entire clip.',
+    'Show the requested action as one coherent continuous physical action from beginning to end.',
     'One clear action, coherent composition, natural motion, realistic anatomy and physics.',
     'Photorealistic cinematic video, sharp detail, natural lighting, stable temporal consistency, high visual quality.',
     `USER SCENE: ${text}`
@@ -33,7 +36,7 @@ globalThis.fetch = async (input, init = {}) => {
   try { body = JSON.parse(init.body || '{}'); } catch {}
 
   const requestedFrames = Number(body.num_frames);
-  const frames = [121, 97, 225].includes(requestedFrames) ? requestedFrames : 121;
+  const frames = [97, 121, 193, 225, 241].includes(requestedFrames) ? requestedFrames : 121;
   const aspect = ['16:9', '9:16', '1:1', '4:3', '3:4', '21:9', '4:5', '2:3', '3:2'].includes(body.aspect)
     ? body.aspect
     : '16:9';
