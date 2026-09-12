@@ -19,7 +19,7 @@ const jobs = new Map();
 const generatedDir = path.join(process.cwd(), 'public', 'generated');
 const audioDir = path.join(process.cwd(), 'public', 'generated-audio');
 const TIMEOUT = 20 * 60 * 1000;
-const NEGATIVE = 'deformed subject, melted subject, duplicate subject, extra limbs, missing limbs, distorted face, distorted hands, duplicate people, merged bodies, floating objects, impossible physics, warped background, unreadable text, cartoon, CGI, unrelated subject, unrelated scene';
+const NEGATIVE = 'deformed subject, melted subject, duplicate subject, extra limbs, missing limbs, distorted face, distorted hands, duplicate people, merged bodies, floating objects, impossible physics, warped background, unreadable text, cartoon, CGI, unrelated subject, unrelated scene, cuts, scene changes, time jumps, location changes';
 
 function cfg(body = {}) {
   const aspect = ['16:9', '9:16', '1:1'].includes(body.aspect) ? body.aspect : '16:9';
@@ -34,12 +34,30 @@ function cfg(body = {}) {
 function promptFor(base, i, count) {
   const text = String(base || '').trim();
   const instruction = i === 0
-    ? 'Start with exactly the scene, subject, setting and action requested by the user.'
-    : 'Continue the exact same scene and subject naturally. Preserve the requested setting, appearance and action. Do not introduce unrelated subjects or change the story.';
+    ? 'ONE CONTINUOUS TAKE. Start with exactly the scene, subject, setting and action requested by the user. No cuts, no scene changes, no time jumps, no location changes. Keep the same subject, appearance, setting and camera continuity from beginning to end.'
+    : 'Continue the exact same scene and subject naturally. Preserve the requested setting, appearance and action. Do not introduce unrelated subjects or change the story. No cuts, no scene changes, no time jumps.';
   return `${text}\n${instruction} This is segment ${i + 1} of ${count} of one continuous video. The user prompt is authoritative.`.slice(0, 4000);
 }
 
-async function submit(prompt, negative, settings, signal) {
+function segmentPlan(total) {
+  const plan = [];
+  let remaining = total;
+  while (remaining > 0) {
+    const seconds = remaining >= 10 ? 10 : remaining;
+    plan.push(seconds);
+    remaining -= seconds;
+  }
+  return plan;
+}
+
+function framesFor(seconds) {
+  const fps = 24;
+  if (seconds === 5) return 121;
+  if (seconds === 10) return 241;
+  return Math.max(25, Math.min(241, Math.round(seconds * fps) + 1));
+}
+
+async function submit(prompt, negative, settings, seconds, signal) {
   const payload = {
     prompt,
     negative: [negative, NEGATIVE].filter(Boolean).join(', ').slice(0, 4000),
@@ -47,7 +65,7 @@ async function submit(prompt, negative, settings, signal) {
     aspect: settings.aspect,
     width: settings.width,
     height: settings.height,
-    num_frames: 121,
+    num_frames: framesFor(seconds),
     frame_rate: settings.fps,
     enhance_prompt: true
   };
@@ -86,9 +104,10 @@ async function download(url, file) {
   await fs.writeFile(file, Buffer.from(await r.arrayBuffer()));
 }
 
-async function normalize(source, target, fps) {
+async function normalize(source, target, fps, seconds) {
   if (!ffmpegPath) throw new Error('FFmpeg no está disponible para normalizar el vídeo.');
-  await execFileAsync(ffmpegPath, ['-y', '-i', source, '-map', '0:v:0', '-vf', `fps=${fps}`, '-t', '5', '-frames:v', String(fps * 5), '-an', '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '20', '-pix_fmt', 'yuv420p', target], { maxBuffer: 1024 * 1024 });
+  const safeSeconds = Math.max(1, Number(seconds) || 5);
+  await execFileAsync(ffmpegPath, ['-y', '-i', source, '-map', '0:v:0', '-vf', `fps=${fps},tpad=stop_mode=clone:stop_duration=${safeSeconds}`, '-t', String(safeSeconds), '-frames:v', String(Math.round(fps * safeSeconds)), '-an', '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '20', '-pix_fmt', 'yuv420p', target], { maxBuffer: 1024 * 1024 });
 }
 
 async function concat(clips, output) {
@@ -105,23 +124,25 @@ async function mux(video, audio, output, seconds) {
 
 async function run(job, body) {
   const total = Number(body.duration);
-  const count = Math.ceil(total / 5);
+  const plan = segmentPlan(total);
+  const count = plan.length;
   const settings = cfg(body);
   const work = await fs.mkdtemp(path.join(os.tmpdir(), 'sala-final-video-'));
   const clips = [];
   let audioPath = '';
   try {
     for (let i = 0; i < count; i += 1) {
+      const seconds = plan[i];
       job.currentScene = i + 1; job.totalScenes = count;
-      job.detail = `Generando segmento ${i + 1} de ${count} según tu prompt…`;
+      job.detail = `Generando segmento ${i + 1} de ${count} (${seconds} s) según tu prompt…`;
       const controller = new AbortController(); job.controller = controller;
-      const id = await submit(promptFor(body.prompt, i, count), body.negative, settings, controller.signal);
+      const id = await submit(promptFor(body.prompt, i, count), body.negative, settings, seconds, controller.signal);
       job.providerRequestId = id;
       const media = await waitFor(id, controller.signal, job);
       const raw = path.join(work, `raw-${i}.mp4`);
       const clip = path.join(work, `clip-${i}.mp4`);
       await download(media, raw);
-      await normalize(raw, clip, settings.fps);
+      await normalize(raw, clip, settings.fps, seconds);
       await fs.rm(raw, { force: true });
       clips.push(clip);
       job.controller = null;
