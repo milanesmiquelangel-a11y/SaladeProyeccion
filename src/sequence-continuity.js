@@ -10,14 +10,14 @@ import { finalizeGeneration, refundGeneration } from './billing-ledger.js';
 const execFileAsync = promisify(execFile);
 const PIXAZO_API_KEY = process.env.PIXAZO_API_KEY;
 const TEXT_URL = process.env.PIXAZO_VIDEO_URL || 'https://gateway.pixazo.ai/ltx-video/v1/text-to-video';
-const IMAGE_URL = 'https://gateway.pixazo.ai/ltx-video/v1/image-to-video';
+const IMAGE_URL = process.env.PIXAZO_IMAGE_VIDEO_URL || 'https://gateway.pixazo.ai/ltx-video/v1/image-to-video';
 const STATUS_URL = process.env.PIXAZO_STATUS_URL || 'https://gateway.pixazo.ai/v2/requests/status';
 const jobs = new Map();
 const TIMEOUT = 20 * 60 * 1000;
 const publicDir = path.join(process.cwd(), 'public');
 const generatedDir = path.join(publicDir, 'generated');
 
-const NEGATIVE = 'different car, changed car model, changed vehicle color, warped car, deformed car, melted car, duplicate car, extra wheels, missing wheels, floating car, sideways driving, diagonal driving, drifting, car off road, car on grass, car on dirt, wheels off asphalt, wheels floating, vehicle crossing road sideways, impossible steering, impossible perspective, broken road, vehicle morphing, vehicle redesign, vehicle teleporting, vehicle reversing while facing forward, duplicate people, merged people, extra limbs, distorted hands, cartoon, CGI';
+const NEGATIVE = 'deformed subject, melted subject, duplicate subject, extra limbs, missing limbs, distorted face, distorted hands, duplicate people, merged bodies, floating objects, impossible physics, warped background, unreadable text, cartoon, CGI';
 
 function config(body = {}) {
   const aspect = ['16:9', '9:16', '1:1'].includes(body.aspect) ? body.aspect : '16:9';
@@ -29,16 +29,17 @@ function config(body = {}) {
   return { aspect, fps, width, height };
 }
 
-function direction(i, total) {
-  const scenes = [
-    'ESTABLISHING ROAD: one black Haval M6 compact SUV drives forward on a clearly paved two-lane road through the Kazakhstan steppe. Entire vehicle stays inside one lane, parallel to the road, all four wheels firmly on asphalt. Smooth front three-quarter tracking camera.',
-    'CONTINUATION: start from the supplied previous final frame. The exact same black Haval M6 remains visually identical, in the same lane and on the same paved road. Continue forward with the same lighting and environment. Camera moves smoothly parallel to the road.',
-    'SAFE STOP: start from the supplied previous final frame. The same black Haval M6 gradually slows and stops parallel to the same paved road at a safe roadside pickup point. Preserve vehicle identity, lighting and road contact.',
-    'PASSENGER PICKUP: start from the supplied previous final frame. The same black Haval M6 remains stopped. One passenger approaches and enters naturally from the passenger side. Keep the vehicle and environment consistent; no driver visible.',
-    'DEPARTURE: start from the supplied previous final frame. The same black Haval M6 starts moving forward from the safe pickup point and follows the paved road. Preserve exact vehicle identity and direction; all four wheels stay on asphalt.',
-    'HERO CLOSING: start from the supplied previous final frame. The same black Haval M6 drives forward on the same paved road through the Kazakhstan steppe at golden hour. Smooth rear three-quarter tracking shot, realistic wheels and road contact.'
+function direction(i, total, userPrompt) {
+  const base = String(userPrompt || '').trim();
+  const directions = [
+    'Show the requested subject and action immediately. Use one clear action, realistic motion and a stable composition.',
+    'Continue the exact same subject, setting and action described by the user. Preserve visual identity and make only natural movement.',
+    'Continue naturally from the previous scene. Keep the user-requested subject and action as the sole visual priority.',
+    'Show the next natural moment of the exact user-requested action. Do not introduce unrelated subjects, objects or locations.',
+    'Maintain continuity with the user prompt. Keep the same main subject and complete the requested action naturally.',
+    'Finish the exact action requested by the user with a clean, coherent final moment.'
   ];
-  return `Scene ${i + 1} of ${total}. ${scenes[i % scenes.length]}`;
+  return `Scene ${i + 1} of ${total}. USER PROMPT IS AUTHORITATIVE: ${base}. ${directions[i % directions.length]} Do not replace the subject or reinterpret the request as a different topic.`;
 }
 
 async function submit(url, payload, signal) {
@@ -108,7 +109,7 @@ async function run(job, body) {
       job.currentScene = i + 1; job.totalScenes = count;
       job.detail = reference ? `Generando escena ${i + 1} de ${count} desde el último fotograma…` : `Generando escena ${i + 1} de ${count}…`;
       const controller = new AbortController(); job.controller = controller;
-      const prompt = `${String(body.prompt || '').trim()}\n\n${direction(i, count)}\nMASTER CONTINUITY: preserve the exact same black Haval M6, road, environment, lighting and camera logic. Change only the requested motion. Photorealistic automotive commercial, physically correct vehicle and road contact.`;
+      const prompt = `${direction(i, count, body.prompt)}\nVISUAL RULES: follow the user's prompt literally. Preserve the same subject, action, setting and style. Use photorealistic natural motion, coherent anatomy and stable composition. Do not add an unrelated theme.`;
       const payload = reference
         ? { prompt: prompt.slice(0, 4000), image_url: reference, strength: 1.0, negative: NEGATIVE, aspect: cfg.aspect, width: cfg.width, height: cfg.height, num_frames: 121, frame_rate: cfg.fps, enhance_prompt: false }
         : { prompt: prompt.slice(0, 4000), negative: NEGATIVE, aspect: cfg.aspect, width: cfg.width, height: cfg.height, num_frames: 121, frame_rate: cfg.fps };
