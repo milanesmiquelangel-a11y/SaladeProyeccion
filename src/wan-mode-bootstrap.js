@@ -3,14 +3,13 @@ import express from 'express';
 import { checkDatabase } from './database.js';
 
 const originalGet = express.application.get;
-const originalPost = express.application.post;
 
 const FREEAI_ENDPOINT = process.env.FREEAI_TALKING_HEAD_ENDPOINT || 'https://api.free.ai/v1/video/talking-head/';
 const FREEAI_API_KEY = String(process.env.FREEAI_API_KEY || '').trim();
 
-// Canonical narrated photo-video engine for Sala de Proyección:
-// Free.ai Talking Head receives the photograph plus generated voice audio.
-// It does not use Hugging Face ZeroGPU.
+// Free.ai is the canonical engine for narrated photo -> talking-head videos.
+// Text-only generation remains available through the normal Pixazo text-to-video route.
+// Hugging Face ZeroGPU is not used for the narrated photo path.
 
 express.application.get = function freeAiModeGet(route, ...handlers) {
   if (route === '/api/health') {
@@ -21,9 +20,9 @@ express.application.get = function freeAiModeGet(route, ...handlers) {
       return res.status(ready ? 200 : 503).json({
         ok: ready,
         service: 'sala-de-proyeccion-api',
-        provider: 'Free.ai',
+        provider: 'Free.ai + Pixazo',
         providerEndpoint: FREEAI_ENDPOINT,
-        generationMode: 'image-to-talking-head',
+        generationMode: 'photo-to-talking-head + text-to-video',
         generationReady: ready,
         freeAiConfigured,
         huggingFaceConfigured: false,
@@ -36,16 +35,4 @@ express.application.get = function freeAiModeGet(route, ...handlers) {
     });
   }
   return originalGet.call(this, route, ...handlers);
-};
-
-express.application.post = function freeAiModePost(route, ...handlers) {
-  if (route === '/api/video/generate' || route === '/api/video/sequence') {
-    return originalPost.call(this, route, (_req, res) => res.status(410).json({
-      error: 'El motor de vídeo hablado desde fotografía es Free.ai. Usa Generar vídeo desde fotografía.',
-      provider: 'Free.ai',
-      providerEndpoint: FREEAI_ENDPOINT,
-      generationMode: 'image-to-talking-head'
-    }));
-  }
-  return originalPost.call(this, route, ...handlers);
 };
