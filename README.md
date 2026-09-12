@@ -2,24 +2,25 @@
 
 International AI video studio for preparing, generating and organizing short AI video productions.
 
-## Current video engine
+## Generation architecture
 
-The canonical narrated photo-video engine is **SadTalker** through the Hugging Face ZeroGPU Space:
+The application has two independent generation paths:
 
-- Space: `henrybit/SadTalker-Demo`
-- Endpoint: `/generate`
-- Runtime authentication: `HF_TOKEN`
-- Mode: image-to-talking-head
-- Input: one reference photograph plus generated driving audio
-- Final narrated clip: 5 seconds
+### 1. Prompt → video
 
-SadTalker is used when narration text is supplied. The generated voice drives the mouth, facial expressions, blinking and small head movements instead of being placed on top of a static video as unrelated voice-over. Without narration, the application falls back to the existing LTX 2.3 visual-only image-to-video workflow.
+The user can write the scene they want without uploading a photograph. The application sends the user's prompt to the free Pixazo LTX video endpoint, preserves the requested subject/action/setting, and generates the selected duration in 5-second segments when necessary. The final segments are normalized and assembled into one MP4.
 
-The repository no longer uses Wan 2.1 as the active generation engine. Legacy Pixazo text/sequence handlers remain only inside the old server implementation for compatibility and are not selected by the active image-to-video route.
+For longer productions, the same user prompt remains authoritative across every segment. Legacy automotive scene instructions are not used by the final sequence handler.
+
+### 2. Photo → talking video
+
+With a reference photograph and narration text, the application generates the requested voice and uses the voice as the driving audio for the Free.ai talking-head service. This produces mouth movement, facial expression, blinking and small head motion rather than simply placing unrelated voice-over on a static image.
+
+Without narration, the photograph path remains available for visual animation through the existing LTX-based image-video workflow.
 
 ## Audio
 
-The image-to-video workflow can generate narration in the selected language. When narration is present, that audio is sent directly to SadTalker as the animation driver, keeping speech and facial movement in the same generation step.
+The audio panel accepts narration text and a selected language. For photo + narration, the voice drives the talking-head animation. For prompt + narration without a photograph, the generated narration is added to the final video MP4. Audio is generated independently from the visual prompt, so changing the narration does not require changing the visual prompt.
 
 ## Application
 
@@ -28,21 +29,31 @@ The web interface includes:
 - Responsive video-production UI.
 - Project drafts and local history.
 - Prompt templates.
-- Reference-image upload.
-- 5-second talking-head generation from a photograph.
-- Optional multilingual narration and lip-sync animation.
-- LTX 2.3 visual-only fallback when narration is empty.
+- Optional reference-image upload.
+- 5, 10, 15, 20, 25, 30 and 60 second prompt-to-video durations.
+- Photo-based talking-head generation.
+- Multilingual narration.
+- Free prompt-to-video generation through Pixazo LTX.
+- Audio muxing into prompt-generated videos.
 - Billing and credit reservation through PostgreSQL.
 - Render deployment configuration.
+- Credit refund on generation failure/cancellation.
+
+## Important engine policy
+
+Wan 2.1 and Wan 2.2 are not used. Hugging Face ZeroGPU is not required for the prompt-to-video path. The talking-head path uses Free.ai rather than the previous ZeroGPU SadTalker route.
+
+The repository deliberately does not claim that the video model can guarantee semantic perfection: the free LTX model is still responsible for the final visual interpretation. The application now sends the user's scene as the authoritative instruction and removes the old hard-coded automotive scene system from the active long-video generation path.
 
 ## Configuration
 
 Set these Render environment variables:
 
-- `HF_TOKEN` — Hugging Face token with access to the ZeroGPU Space.
-- `SADTALKER_FREE_SPACE` — defaults to `henrybit/SadTalker-Demo`.
-- `SADTALKER_FREE_ENDPOINT` — defaults to `/generate`.
-- `DATABASE_URL` — PostgreSQL connection used by the billing system.
+- `PIXAZO_API_KEY` — key for the free Pixazo video endpoint.
+- `PIXAZO_VIDEO_URL` — optional; defaults to the free LTX text-to-video endpoint.
+- `FREEAI_API_KEY` — key for the Free.ai talking-head endpoint.
+- `FREEAI_TALKING_HEAD_ENDPOINT` — optional; defaults to `https://api.free.ai/v1/video/talking-head/`.
+- `DATABASE_URL` — PostgreSQL connection used by billing.
 
 Never commit secret tokens to GitHub.
 
@@ -55,7 +66,7 @@ npm install
 npm start
 ```
 
-The application starts through `src/wan-mode-entry.js`, which activates the source guard before loading the existing application entrypoint.
+The application starts through `src/wan-mode-entry.js`, which loads the generation guards and then the monetized application entrypoint.
 
 Health endpoint:
 
@@ -63,4 +74,4 @@ Health endpoint:
 GET /api/health
 ```
 
-The health response identifies the active provider as **SadTalker** and reports whether Hugging Face and PostgreSQL are configured.
+Before launch, verify that the Render service has the required environment variables and that the health endpoint reports the generation and billing services as ready.
