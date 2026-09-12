@@ -173,10 +173,28 @@ function finalSequencePost(req, res) {
   return res.status(202).json({ job_id: id, duration, audio: Boolean(String(body.audioText || '').trim()) });
 }
 
+function finalGenerationPost(req, res) {
+  const body = req.body || {};
+  if (!PIXAZO_API_KEY) return res.status(503).json({ error: 'PIXAZO_API_KEY no está configurada en el servidor.' });
+  if (typeof body.prompt !== 'string' || !body.prompt.trim()) return res.status(400).json({ error: 'prompt es obligatorio.' });
+  const id = randomUUID();
+  const job = { id, status: 'QUEUED', detail: 'Preparando generación desde tu prompt…', createdAt: Date.now(), cancelled: false, controller: null, providerRequestId: '', providerState: '', outputUrl: '', req, userId: req.salaBillingUserId, transactionId: req.salaBillingTransactionId };
+  jobs.set(id, job);
+  run(job, { ...body, duration: 5 }).catch(() => {});
+  return res.status(202).json({ request_id: id, duration: 5 });
+}
+
 function finalSequenceStatus(req, res) {
   const job = jobs.get(String(req.params.jobId || ''));
   if (!job) return res.status(404).json({ error: 'No se encontró la generación.' });
   return res.json({ ...job, req: undefined, controller: undefined, userId: undefined, transactionId: undefined });
+}
+
+function finalGenerationStatus(req, res) {
+  const job = jobs.get(String(req.params.requestId || ''));
+  if (!job) return res.status(404).json({ error: 'No se encontró la generación.' });
+  if (job.status === 'COMPLETED' && job.outputUrl) return res.json({ status: 'COMPLETED', output: { media_url: [job.outputUrl] } });
+  return res.json({ status: job.status, state: job.providerState || job.status, detail: job.detail || '' });
 }
 
 async function finalSequenceCancel(req, res) {
@@ -192,16 +210,27 @@ async function finalSequenceCancel(req, res) {
   return res.json({ ok: true, status: 'CANCELLED', job_id: job.id, creditRefunded: refunded });
 }
 
+async function finalGenerationCancel(req, res) {
+  const job = jobs.get(String(req.params.requestId || ''));
+  if (!job) return res.status(404).json({ error: 'No se encontró la generación.' });
+  job.cancelled = true;
+  if (job.controller) job.controller.abort();
+  if (job.userId && job.transactionId) await refundGeneration(job.userId, job.transactionId, 'generation_cancelled');
+  return res.json({ ok: true, status: 'CANCELLED', creditRefunded: true });
+}
+
 express.application.post = function finalPost(route, ...handlers) {
-  if (route === '/api/video/sequence') {
-    if (handlers.length >= 2) handlers[handlers.length - 1] = finalSequencePost;
+  if (route === '/api/video/sequence' || route === '/api/video/generate') {
+    if (handlers.length >= 2) handlers[handlers.length - 1] = route === '/api/video/sequence' ? finalSequencePost : finalGenerationPost;
     return nativePost.call(this, route, ...handlers);
   }
   if (route === '/api/video/sequence/:jobId/cancel') return nativePost.call(this, route, finalSequenceCancel);
+  if (route === '/api/video/cancel/:requestId') return nativePost.call(this, route, finalGenerationCancel);
   return nativePost.call(this, route, ...handlers);
 };
 
 express.application.get = function finalGet(route, ...handlers) {
   if (route === '/api/video/sequence/:jobId') return nativeGet.call(this, route, finalSequenceStatus);
+  if (route === '/api/video/status/:requestId') return nativeGet.call(this, route, finalGenerationStatus);
   return nativeGet.call(this, route, ...handlers);
 };
