@@ -6,13 +6,17 @@ services:
     startCommand: npm start
     healthCheckPath: /api/health
     envVars:
+      - key: PIXAZO_API_KEY
+        sync: false
+      - key: PIXAZO_VIDEO_URL
+        value: https://gateway.pixazo.ai/ltx-video/v1/text-to-video
       - key: VIDEO_PROVIDER
-        value: freeai
+        value: pixazo-ltx-free
       - key: IMAGE_VIDEO_ENGINE
         value: freeai
       - key: FREEAI_TALKING_HEAD_ENDPOINT
         value: https://api.free.ai/v1/video/talking-head/
       - key: FREEAI_API_KEY
         sync: false
-      - key: HF_TOKEN
+      - key: DATABASE_URL
         sync: false
