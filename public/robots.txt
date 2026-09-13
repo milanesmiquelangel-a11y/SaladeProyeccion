@@ -1,0 +1,4 @@
+User-agent: *
+Allow: /
+Disallow: /admin
+Sitemap: https://sala-de-proyeccion.onrender.com/sitemap.xml
