@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { dbQuery, databaseConfigured, withTransaction } from './database.js';
 
-const FREE_CREDITS = 30;
+const FREE_CREDITS = 3;
 
 export { databaseConfigured };
 
@@ -13,9 +13,9 @@ async function ensureAccount(client, userId) {
   const existing = await client.query('SELECT * FROM sala_accounts WHERE user_id = $1 FOR UPDATE', [userId]);
   if (existing.rowCount) {
     const row = existing.rows[0];
-    // Migrate old free accounts from the previous 24-hour recharge model.
-    // The presence of next_recharge_at marks an account created under that model.
-    if (row.plan === 'Gratis' && row.next_recharge_at) {
+    // Migrate legacy free accounts to the current one-time 3-credit grant.
+    // Also correct untouched accounts that were created with the old 30-credit grant.
+    if (row.plan === 'Gratis' && (row.next_recharge_at || (Number(row.credits) === 30 && Number(row.total_consumed || 0) === 0))) {
       row.credits = FREE_CREDITS;
       row.next_recharge_at = null;
       await client.query('UPDATE sala_accounts SET credits = $2, next_recharge_at = NULL WHERE user_id = $1', [userId, FREE_CREDITS]);
