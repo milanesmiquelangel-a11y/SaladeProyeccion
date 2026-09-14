@@ -28,15 +28,15 @@ jobs:
         with:
           gradle-version: '8.9'
 
-      - name: Build release AAB and APK
+      - name: Build debug APK and release AAB
         working-directory: android
-        run: gradle :app:bundleRelease :app:assembleRelease --no-daemon
+        run: gradle :app:assembleDebug :app:bundleRelease --no-daemon
 
       - name: Upload Android artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: sala-de-proyeccion-android-release
+          name: sala-de-proyeccion-android-deliverables
           path: |
+            android/app/build/outputs/apk/debug/app-debug.apk
             android/app/build/outputs/bundle/release/app-release.aab
-            android/app/build/outputs/apk/release/app-release-unsigned.apk
           if-no-files-found: error
