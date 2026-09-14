@@ -2,95 +2,113 @@
 
 ## Suggested title
 
-**AI Video Studio SaaS — Prompt-to-Video Web App with Credits, Billing & Provider-Agnostic Architecture**
+**AI Video Studio SaaS — Ready-to-Customize Prompt-to-Video Web App**
 
-## Short description
+## Short pitch
 
-**Sala de Proyección** is a ready-to-customize web application for AI video creation. It combines a creator-focused studio UI with prompt-to-video generation, multilingual narration, PostgreSQL credit accounting, Stripe integration points, FFmpeg media processing, project organization and deployment configuration.
+Acquire a ready-to-customize AI video studio rather than starting from zero. Sala de Proyección combines a creator-focused web interface with prompt-to-video orchestration, multilingual narration, FFmpeg media processing, PostgreSQL credit accounting, Stripe billing integration points, administrator controls and deployment configuration.
 
-The product is being offered as a technology/product acquisition. It is especially suitable for an entrepreneur, agency, AI tooling company or developer who wants an existing application foundation rather than starting from zero.
+**Asking price: USD 7,500 — negotiable.**
 
-## Asking price
+## Full listing copy
 
-**USD 7,500 — negotiable**
+### Overview
 
-Target negotiation range: **USD 5,000–7,500**, depending on support, transfer scope, branding/domain and other terms.
+Sala de Proyección is an international AI video studio web application designed for creators and operators who want a structured product around AI video generation instead of exposing users directly to a raw model API.
 
-## What is included
+The current product strategy is **Phase 1: Prompt → Video**. The application contains the product shell, generation workflow, media-processing layer, credit ledger, billing integration points, administration and deployment configuration. Image-to-video is deliberately deferred until a production-ready engine is selected and validated.
+
+### Why buy it?
+
+Building an AI video product requires more than connecting an AI model. The buyer receives an existing application architecture covering the creator interface, generation orchestration, credit accounting, failure refunds, media processing, billing hooks, deployment configuration and technical documentation.
+
+A buyer can then concentrate on provider selection, branding, distribution and customer acquisition instead of rebuilding the entire application layer.
+
+### Key features
+
+- Prompt-to-video creation workflow.
+- 16:9, 9:16 and 1:1 output formats.
+- Configurable duration, quality and 24/30 FPS.
+- Optional multilingual narration.
+- FFmpeg normalization and video assembly.
+- Project drafts, local history and prompt templates.
+- PostgreSQL-backed credit accounting.
+- Generation reservation, finalization and refund handling.
+- Stripe Checkout/webhook integration points.
+- Administrator configuration.
+- Render deployment configuration and health endpoint.
+- Provider credentials kept server-side.
+- Provider-oriented architecture that allows the buyer to change infrastructure without redesigning the creator UI.
+
+### Ideal buyer
+
+- AI creator-tool company looking to add video generation.
+- SaaS founder seeking a starting point for an AI video product.
+- Digital agency wanting its own branded video-generation platform.
+- Developer/team with access to a preferred AI video provider or self-hosted model.
+- Entrepreneur who wants to launch an AI video SaaS without building the application layer from scratch.
+
+### What is included
 
 - Complete source repository.
 - Frontend and backend application code.
-- Prompt-to-video Phase 1 workflow.
-- Credit reservation, finalization and refund logic.
-- PostgreSQL-backed account/credit layer.
-- Stripe Checkout/webhook integration points.
-- FFmpeg media processing and assembly.
+- Database and credit-ledger logic.
+- Billing integration points.
 - Administrator configuration.
-- Render deployment configuration.
-- SEO configuration, sitemap and robots setup.
-- Technical handoff and due-diligence documentation.
+- Deployment configuration.
+- Product/readiness documentation.
+- Buyer handoff documentation.
+- Demo script and due-diligence checklist.
 
-## Current product state
+### What is not automatically included
 
-The product is an application layer rather than a claim that one third-party AI provider is permanently guaranteed. The video-generation layer is configurable, allowing a buyer to change provider/infrastructure strategy without rebuilding the creator interface.
+Third-party API accounts, provider accounts, domains, payment accounts, private credentials and paid provider credits are excluded unless separately agreed in writing.
 
-Phase 1 intentionally focuses on **Prompt → Video**. Image-to-video is deferred until a dedicated production-ready engine is selected and validated.
+### Current commercial status
 
-## Key features
+The project is being offered as a technology/product acquisition. There are no fabricated claims about MRR, ARR, customers or profitability. The buyer is purchasing the existing software and its development foundation, not an established revenue stream.
 
-- Responsive AI video studio interface.
-- Prompt-to-video generation.
-- 16:9, 9:16 and 1:1 formats.
-- Configurable duration.
-- Standard/high quality and 24/30 FPS controls.
-- Optional multilingual narration.
-- FFmpeg normalization and assembly.
-- Project drafts, local history and prompt templates.
-- PostgreSQL credit ledger.
-- Reservation/finalization/refund flow for generation credits.
-- Stripe Checkout/webhook integration points.
-- Administrator controls.
-- Render deployment and health endpoint.
+### Technical disclosure
 
-## Ideal buyer
+The application is an orchestration/product layer around AI video providers. Provider availability, quotas, pricing, licensing and terms can change and must be independently verified by the buyer before production deployment.
 
-- AI creator-tool founder.
-- Small SaaS operator.
-- AI/video agency.
-- Developer or development team.
-- Entrepreneur looking for an existing AI video product foundation.
+Wan 2.1 and Wan 2.2 are not used. Hugging Face ZeroGPU is not required for the prompt-to-video path.
 
-## Why buy instead of build?
+### Price
 
-The buyer receives an already-structured product with a creator UI, backend orchestration, billing/credit foundations, media-processing layer and deployment documentation. The main opportunity is to connect the preferred production infrastructure, refine the UX and launch under the buyer's own brand and accounts.
+**USD 7,500 asking price.**
 
-## Important disclosure
+Target negotiation range: **USD 5,000–7,500**, depending on the buyer's requested support, transfer scope, branding/domain requirements and handoff terms.
 
-Third-party API keys, provider accounts, domains, paid provider credits and payment credentials are not included unless explicitly transferred in a separate written agreement. Provider availability, pricing, quotas, licensing and terms must be independently verified by the buyer before commercial deployment.
+### Buyer response template
 
-## Buyer review
+> Thanks for your interest in Sala de Proyección. The asset includes the complete source repository, application architecture, credit/billing logic, deployment configuration and technical documentation. It is currently positioned as a pre-revenue technology acquisition, so I am not representing fabricated customer or revenue metrics. The asking price is USD 7,500 and is negotiable depending on transfer scope and handoff requirements. I can provide a technical walkthrough and due-diligence materials before discussing final terms.
 
-The repository includes:
-
-- `docs/PRODUCT_STATUS.md`
-- `docs/BUYER_HANDOFF.md`
-- `docs/SALES_LISTING.md`
-- `docs/DEMO_SCRIPT.md`
-- `docs/DUE_DILIGENCE.md`
-- `public/acquisition.html`
-
-## Suggested seller response to an interested buyer
-
-> Thanks for your interest in Sala de Proyección. The application is offered as a technology/product acquisition at USD 7,500 negotiable. The sale includes the source repository, implemented application layer, billing/credit foundations, deployment configuration and technical documentation. Third-party provider accounts, API keys, domains and payment credentials are separate unless explicitly agreed. I can provide a technical walkthrough and agree the exact handoff scope with the buyer.
-
-## Listing strategy
+## Marketplace strategy
 
 ### Acquire.com
 
-Position the product as a **pre-revenue SaaS/product acquisition** and keep the listing factual, complete and verifiable. Acquire's current seller guidance says pre-revenue SaaS is subject to stricter curation and gives a price ceiling of under $25,000 for qualifying pre-revenue listings. The current $7,500 asking price is below that ceiling.
+Use the listing only if the current qualification review accepts the product. Acquire's current guidance says pre-revenue businesses can qualify when they are functional SaaS or AI products, but pre-revenue listings are curated more strictly. Their seller FAQ also states that qualifying pre-revenue listings should generally be priced under $25,000. The current $7,500 asking price is below that threshold. urlAcquire seller guidancehttps://help.acquire.com/what-pre-revenue-businesses-are-allowed
 
 ### Flippa
 
-Position it as an **AI SaaS / web application / project** rather than claiming established recurring revenue. Flippa currently supports SaaS and project/concept listings, and its marketplace guidance emphasizes transparent performance information and appropriate pricing.
+Use Flippa as the broader marketplace channel for the digital asset/SaaS sale. Flippa currently supports SaaS listings and emphasizes transparent performance information, buyer diligence and transferable operations. urlFlippa SaaS marketplacehttps://flippa.com/sell/saas
 
-Do not invent users, MRR, ARR, profit, retention or usage statistics. If there is no verified revenue, state that clearly.
+For a sub-$10,000 asking price, Flippa currently shows a $29 entry self-service package, with additional packages available; success fees apply depending on the sale. Verify the current fee shown during listing before purchasing. urlFlippa pricinghttps://flippa.com/pricing
+
+### Direct outreach
+
+Approach AI agencies, creator-tool founders, video SaaS operators and developers who already have an AI inference/provider relationship. A direct strategic buyer may value the application architecture more highly than a general marketplace buyer.
+
+## Do not claim
+
+Never invent or imply:
+
+- paying customers;
+- MRR or ARR;
+- profit;
+- retention/churn metrics;
+- traffic numbers;
+- guaranteed provider uptime;
+- guaranteed generation quality;
+- ownership of third-party provider accounts.
