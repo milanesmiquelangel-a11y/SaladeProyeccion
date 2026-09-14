@@ -60,6 +60,13 @@ See:
 - `docs/PRODUCT_STATUS.md` — product readiness and known limitations.
 - `docs/BUYER_HANDOFF.md` — technical handoff information.
 - `docs/SALES_LISTING.md` — commercial sales draft and asking-price strategy.
+- `public/acquisition.html` — buyer-facing acquisition landing page.
+
+## Acquisition
+
+The application is currently prepared for a potential acquisition rather than requiring an immediate paid launch. The buyer-facing page presents the product, included assets, architecture, limitations and current asking price.
+
+**Asking price: USD 7,500 — negotiable.**
 
 ## Important engine policy
 
