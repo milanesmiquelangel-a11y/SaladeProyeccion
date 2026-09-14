@@ -1,61 +1,36 @@
 # Sala de Proyección
 
-International AI video studio for preparing, generating and organizing short AI video productions.
+**International AI video studio for preparing, generating and organizing short AI video productions.**
 
-## Generation architecture
+## Product overview
 
-The application has two independent generation paths:
+Sala de Proyección is a web application that turns a user's scene description into an AI-generated video, with optional multilingual narration, project organization, credit accounting and administrator controls.
 
-### 1. Prompt → video
+The current launch strategy is **Phase 1: Prompt → Video**. Image-to-video is intentionally deferred until a dedicated production-ready engine is selected and validated.
 
-The user can write the scene they want without uploading a photograph. The application sends the user's prompt to the free Pixazo LTX video endpoint, preserves the requested subject/action/setting, and generates the selected duration in 5-second segments when necessary. The final segments are normalized and assembled into one MP4.
+## Current capabilities
 
-For longer productions, the same user prompt remains authoritative across every segment. Legacy automotive scene instructions are not used by the final sequence handler.
-
-### 2. Photo → talking video
-
-With a reference photograph and narration text, the application generates the requested voice and uses the voice as the driving audio for the Free.ai talking-head service. This produces mouth movement, facial expression, blinking and small head motion rather than simply placing unrelated voice-over on a static image.
-
-Without narration, the photograph path remains available for visual animation through the existing LTX-based image-video workflow.
-
-## Audio
-
-The audio panel accepts narration text and a selected language. For photo + narration, the voice drives the talking-head animation. For prompt + narration without a photograph, the generated narration is added to the final video MP4. Audio is generated independently from the visual prompt, so changing the narration does not require changing the visual prompt.
-
-## Application
-
-The web interface includes:
-
-- Responsive video-production UI.
+- Responsive video-production interface.
+- Prompt-to-video generation.
+- Configurable 16:9, 9:16 and 1:1 formats.
+- Configurable video duration.
+- Standard/high quality options and 24/30 FPS.
+- Optional multilingual narration.
+- FFmpeg video normalization and assembly.
 - Project drafts and local history.
 - Prompt templates.
-- Optional reference-image upload.
-- 5, 10, 15, 20, 25, 30 and 60 second prompt-to-video durations.
-- Photo-based talking-head generation.
-- Multilingual narration.
-- Free prompt-to-video generation through Pixazo LTX.
-- Audio muxing into prompt-generated videos.
-- Billing and credit reservation through PostgreSQL.
+- PostgreSQL-backed credit accounting.
+- Credit reservation, finalization and refund on failed/cancelled generation.
+- Stripe Checkout/webhook integration points.
+- Administrator configuration.
 - Render deployment configuration.
-- Credit refund on generation failure/cancellation.
+- Health endpoint for deployment verification.
 
-## Important engine policy
+## Commercial architecture
 
-Wan 2.1 and Wan 2.2 are not used. Hugging Face ZeroGPU is not required for the prompt-to-video path. The talking-head path uses Free.ai rather than the previous ZeroGPU SadTalker route.
+The application keeps provider credentials on the server. The video-generation layer is configurable through environment variables so the owner can replace the underlying provider/model without redesigning the product interface.
 
-The repository deliberately does not claim that the video model can guarantee semantic perfection: the free LTX model is still responsible for the final visual interpretation. The application now sends the user's scene as the authoritative instruction and removes the old hard-coded automotive scene system from the active long-video generation path.
-
-## Configuration
-
-Set these Render environment variables:
-
-- `PIXAZO_API_KEY` — key for the free Pixazo video endpoint.
-- `PIXAZO_VIDEO_URL` — optional; defaults to the free LTX text-to-video endpoint.
-- `FREEAI_API_KEY` — key for the Free.ai talking-head endpoint.
-- `FREEAI_TALKING_HEAD_ENDPOINT` — optional; defaults to `https://api.free.ai/v1/video/talking-head/`.
-- `DATABASE_URL` — PostgreSQL connection used by billing.
-
-Never commit secret tokens to GitHub.
+Billing is credit-based. Current configured plans are Creator and Pro; production payment activation requires the operator's own Stripe credentials and Price IDs.
 
 ## Deployment
 
@@ -66,7 +41,7 @@ npm install
 npm start
 ```
 
-The application starts through `src/wan-mode-entry.js`, which loads the generation guards and then the monetized application entrypoint.
+The application starts through `src/wan-mode-entry.js`.
 
 Health endpoint:
 
@@ -74,4 +49,24 @@ Health endpoint:
 GET /api/health
 ```
 
-Before launch, verify that the Render service has the required environment variables and that the health endpoint reports the generation and billing services as ready.
+Required production configuration includes a PostgreSQL `DATABASE_URL`, video-provider credentials, and (when payments are enabled) Stripe secret/webhook/Price ID values.
+
+## Buyer handoff
+
+A commercial handoff should use fresh credentials owned by the buyer. Third-party API accounts, domains, payment accounts and paid provider credits are not included unless explicitly agreed in writing.
+
+See:
+
+- `docs/PRODUCT_STATUS.md` — product readiness and known limitations.
+- `docs/BUYER_HANDOFF.md` — technical handoff information.
+- `docs/SALES_LISTING.md` — commercial sales draft and asking-price strategy.
+
+## Important engine policy
+
+Wan 2.1 and Wan 2.2 are not used. Hugging Face ZeroGPU is not required for the prompt-to-video path.
+
+The repository does not guarantee semantic perfection from the AI video model. The configured model remains responsible for the final visual interpretation.
+
+## Security
+
+Never commit API keys, payment secrets, database credentials or administrator passwords to GitHub. Production credentials belong only in the deployment environment.
