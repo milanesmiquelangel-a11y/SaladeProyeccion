@@ -1,0 +1,4 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="build_channel">debug_test_and_release_aab</string>
+</resources>
