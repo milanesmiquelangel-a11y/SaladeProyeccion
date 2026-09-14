@@ -1,0 +1,1 @@
+The Android companion is intentionally a WebView wrapper around the existing production web application. Debug APK builds are installable for device testing. Release AAB builds are unsigned unless a release signing key is supplied; do not commit private signing keys.
