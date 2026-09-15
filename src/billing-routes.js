@@ -1,104 +1,120 @@
 import express from 'express';
-import crypto from 'node:crypto';
 import { BILLING_CONFIG, billingIsConfigured } from './billing-config.js';
 import { creditAccount } from './billing-ledger.js';
+import { dbQuery } from './database.js';
+import { createPayPalSubscription, getPayPalSubscription, paypalConfigured, paypalPlanId, paypalStatus, verifyPayPalWebhook } from './paypal-billing.js';
 
 const router = express.Router();
 
 function disabled(res, message = 'Pagos no configurados todavía.') {
   return res.status(503).json({ error: message, provider: BILLING_CONFIG.provider, configured: false });
 }
-function configured(req, res, next) {
-  if (!billingIsConfigured()) return disabled(res);
+
+function configured(_req, res, next) {
+  if (!billingIsConfigured()) return disabled(res, 'PayPal todavía no está configurado. Faltan las credenciales y/o los IDs de los planes.');
   next();
 }
-function priceIdFor(planId) {
-  return planId === 'creator' ? process.env.STRIPE_PRICE_CREATOR : planId === 'pro' ? process.env.STRIPE_PRICE_PRO : null;
+
+function planFromPayPalId(planId) {
+  if (planId && planId === process.env.PAYPAL_CREATOR_PLAN_ID) return 'creator';
+  if (planId && planId === process.env.PAYPAL_PRO_PLAN_ID) return 'pro';
+  return null;
 }
 
 router.get('/status', (_req, res) => {
-  const stripeSecret = Boolean(process.env.STRIPE_SECRET_KEY);
-  const webhook = Boolean(process.env.STRIPE_WEBHOOK_SECRET);
-  const creatorPrice = Boolean(process.env.STRIPE_PRICE_CREATOR);
-  const proPrice = Boolean(process.env.STRIPE_PRICE_PRO);
-  const ready = billingIsConfigured() && webhook && creatorPrice && proPrice;
+  const status = paypalStatus();
   res.json({
-    provider: BILLING_CONFIG.provider,
+    ...status,
     enabled: BILLING_CONFIG.enabled,
-    configured: ready,
-    testMode: Boolean(process.env.STRIPE_SECRET_KEY?.startsWith('sk_test_')),
-    requirements: { secretKey: stripeSecret, webhookSecret: webhook, creatorPriceId: creatorPrice, proPriceId: proPrice }
+    currency: BILLING_CONFIG.currency,
+    plans: Object.fromEntries(Object.entries(BILLING_CONFIG.plans).map(([id, plan]) => [id, {
+      name: plan.name,
+      priceCents: plan.priceCents,
+      credits: plan.credits,
+      planConfigured: Boolean(paypalPlanId(id))
+    }]))
   });
 });
 
 router.post('/checkout', configured, async (req, res) => {
   const planId = String(req.body?.plan || '').toLowerCase();
   const plan = BILLING_CONFIG.plans[planId];
-  const priceId = priceIdFor(planId);
   const accountId = String(req.get('x-sala-user-id') || '').trim();
-  if (!accountId || !/^[a-zA-Z0-9_-]{16,80}$/.test(accountId)) return res.status(400).json({ error: 'Cuenta no identificada.' });
-  if (!plan || !priceId) return res.status(400).json({ error: 'Plan no válido o Price ID de Stripe no configurado.' });
+  if (!accountId || !/^[a-zA-Z0-9_-]{16,80}$/.test(accountId)) return res.status(401).json({ error: 'Cuenta no autenticada.' });
+  if (!plan || !paypalPlanId(planId)) return res.status(400).json({ error: 'Plan no válido o plan de PayPal no configurado.' });
   try {
-    const params = new URLSearchParams();
-    params.set('mode', 'payment');
-    params.append('line_items[0][price]', priceId);
-    params.append('line_items[0][quantity]', '1');
-    params.set('success_url', process.env.STRIPE_SUCCESS_URL || 'https://sala-de-proyeccion.onrender.com/?billing=success');
-    params.set('cancel_url', process.env.STRIPE_CANCEL_URL || 'https://sala-de-proyeccion.onrender.com/?billing=cancel');
-    params.set('client_reference_id', accountId);
-    params.set('metadata[account_id]', accountId);
-    params.set('metadata[plan]', planId);
-    params.set('metadata[credits]', String(plan.credits));
-    const session = await stripeRequest('checkout/sessions', { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: params });
-    return res.json({ checkoutUrl: session.url, sessionId: session.id, plan: planId });
+    const user = await dbQuery('SELECT email FROM sala_users WHERE id = $1 LIMIT 1', [accountId]);
+    const email = user.rows[0]?.email;
+    if (!email) return res.status(404).json({ error: 'No se encontró el correo de la cuenta.' });
+    const subscription = await createPayPalSubscription({ planId, accountId, email });
+    const approvalUrl = subscription?.links?.find((link) => link.rel === 'approve')?.href;
+    if (!approvalUrl) return res.status(502).json({ error: 'PayPal no devolvió la dirección de aprobación.' });
+    return res.json({ checkoutUrl: approvalUrl, subscriptionId: subscription.id, plan: planId, provider: 'paypal' });
   } catch (error) {
-    console.error('Stripe checkout error:', error);
-    return res.status(502).json({ error: error.message || 'No se pudo crear el checkout de Stripe.' });
+    console.error('PayPal checkout error:', error);
+    return res.status(502).json({ error: error.message || 'No se pudo iniciar el pago con PayPal.' });
   }
 });
 
-async function stripeRequest(endpoint, options = {}) {
-  const auth = Buffer.from(`${process.env.STRIPE_SECRET_KEY}:`).toString('base64');
-  const response = await fetch(`https://api.stripe.com/v1/${endpoint}`, { ...options, headers: { Authorization: `Basic ${auth}`, ...(options.headers || {}) } });
-  const data = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(data?.error?.message || `Stripe respondió HTTP ${response.status}.`);
-  return data;
-}
+router.post('/portal', configured, (_req, res) => {
+  res.status(501).json({ error: 'La gestión del plan se realizará desde PayPal por ahora.', provider: 'paypal' });
+});
 
-router.post('/portal', configured, async (_req, res) => disabled(res, 'El portal de facturación se habilitará cuando exista un Customer de Stripe asociado a la cuenta.'));
-
-function validStripeSignature(rawBody, header, secret) {
-  const parts = String(header || '').split(',').map((item) => item.split('='));
-  const timestamp = parts.find(([key]) => key === 't')?.[1];
-  const signatures = parts.filter(([key]) => key === 'v1').map(([, value]) => value);
-  if (!timestamp || !signatures.length) return false;
-  const age = Math.abs(Math.floor(Date.now() / 1000) - Number(timestamp));
-  if (!Number.isFinite(age) || age > 300) return false;
-  const expected = crypto.createHmac('sha256', secret).update(`${timestamp}.${rawBody}`).digest('hex');
-  return signatures.some((candidate) => candidate.length === expected.length && crypto.timingSafeEqual(Buffer.from(candidate), Buffer.from(expected)));
+async function subscriptionContext(subscriptionId) {
+  if (!subscriptionId) return null;
+  const subscription = await getPayPalSubscription(subscriptionId);
+  const planId = String(subscription?.plan_id || '').trim();
+  const accountId = String(subscription?.custom_id || '').trim();
+  return { subscription, planId, accountId, plan: planFromPayPalId(planId) };
 }
 
 router.post('/webhook', async (req, res) => {
-  const secret = process.env.STRIPE_WEBHOOK_SECRET;
-  if (!secret) return res.status(503).json({ error: 'Webhook de Stripe no configurado.', configured: false });
-  if (!req.rawBody || !validStripeSignature(req.rawBody, req.get('stripe-signature'), secret)) return res.status(400).json({ error: 'Firma de webhook de Stripe no válida.' });
-  const event = req.body || {};
-  if (event.type === 'checkout.session.completed') {
-    const session = event.data?.object || {};
-    const metadata = session.metadata || {};
-    const accountId = String(metadata.account_id || session.client_reference_id || '').trim();
-    const planId = String(metadata.plan || '').toLowerCase();
-    const plan = BILLING_CONFIG.plans[planId];
-    if (!accountId || !plan) return res.status(400).json({ error: 'Checkout sin cuenta o plan válido.' });
-    try {
-      const result = await creditAccount(accountId, plan.credits, { eventId: event.id, paymentId: session.id, plan: planId });
-      return res.json({ received: true, eventId: event.id || null, credited: !result.alreadyProcessed });
-    } catch (error) {
-      console.error('Stripe credit error:', error);
-      return res.status(500).json({ error: 'No se pudieron acreditar los créditos.' });
-    }
+  if (!paypalConfigured() || !process.env.PAYPAL_WEBHOOK_ID) {
+    return res.status(503).json({ error: 'Webhook de PayPal no configurado.', configured: false });
   }
-  return res.json({ received: true, eventId: event.id || null, credited: false });
+
+  const event = req.body || {};
+  try {
+    const verified = await verifyPayPalWebhook({ headers: req.headers, event });
+    if (!verified) return res.status(400).json({ error: 'Firma de webhook de PayPal no válida.' });
+
+    const eventType = String(event.event_type || '');
+    const resource = event.resource || {};
+    const subscriptionId = resource.billing_agreement_id || resource.id || resource.subscription_id || null;
+    const context = await subscriptionContext(subscriptionId);
+
+    if (!context?.accountId) {
+      console.warn('PayPal webhook without internal account:', event.id, eventType);
+      return res.json({ received: true, eventId: event.id || null, credited: false });
+    }
+
+    if (eventType === 'PAYMENT.SALE.COMPLETED') {
+      if (!context.plan) return res.status(400).json({ error: 'Pago de PayPal asociado a un plan desconocido.' });
+      const plan = BILLING_CONFIG.plans[context.plan];
+      const result = await creditAccount(context.accountId, plan.credits, {
+        provider: 'paypal',
+        eventId: event.id,
+        paymentId: resource.id || subscriptionId,
+        plan: context.plan
+      });
+      return res.json({ received: true, eventId: event.id || null, credited: !result.alreadyProcessed });
+    }
+
+    if (eventType === 'BILLING.SUBSCRIPTION.ACTIVATED' || eventType === 'BILLING.SUBSCRIPTION.UPDATED') {
+      if (context.plan) {
+        await dbQuery('UPDATE sala_accounts SET plan = $2 WHERE user_id = $1', [context.accountId, BILLING_CONFIG.plans[context.plan].name]);
+      }
+    }
+
+    if (eventType === 'BILLING.SUBSCRIPTION.CANCELLED' || eventType === 'BILLING.SUBSCRIPTION.EXPIRED' || eventType === 'BILLING.SUBSCRIPTION.SUSPENDED') {
+      await dbQuery('UPDATE sala_accounts SET plan = $2 WHERE user_id = $1', [context.accountId, 'Gratis']);
+    }
+
+    return res.json({ received: true, eventId: event.id || null, credited: false });
+  } catch (error) {
+    console.error('PayPal webhook error:', error);
+    return res.status(500).json({ error: 'No se pudo procesar el webhook de PayPal.' });
+  }
 });
 
 export default router;
