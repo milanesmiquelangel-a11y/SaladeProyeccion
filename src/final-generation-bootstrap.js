@@ -13,6 +13,7 @@ const execFileAsync = promisify(execFile);
 const nativePost = express.application.post;
 const nativeGet = express.application.get;
 const TEXT_URL = process.env.PIXAZO_VIDEO_URL || 'https://gateway.pixazo.ai/ltx-video/v1/text-to-video';
+const IMAGE_URL = process.env.PIXAZO_IMAGE_VIDEO_URL || 'https://gateway.pixazo.ai/ltx-video/v1/image-to-video';
 const STATUS_URL = process.env.PIXAZO_STATUS_URL || 'https://gateway.pixazo.ai/v2/requests/status';
 const PIXAZO_API_KEY = process.env.PIXAZO_API_KEY;
 const jobs = new Map();
@@ -31,21 +32,15 @@ function cfg(body = {}) {
   return { aspect, width, height, fps };
 }
 
-function promptFor(base, i, count) {
+function promptFor(base, i, count, hasReference) {
   const text = String(base || '').trim();
-  const instruction = i === 0
-    ? 'ONE CONTINUOUS TAKE. Start with exactly the scene, subject, setting and action requested by the user. No cuts, no scene changes, no time jumps, no location changes. Keep the same subject, appearance, setting and camera continuity from beginning to end.'
-    : 'Continue the exact same scene and subject naturally. Preserve the requested setting, appearance and action. Do not introduce unrelated subjects or change the story. No cuts, no scene changes, no time jumps.';
+  const instruction = hasReference
+    ? 'CONTINUE DIRECTLY FROM THE SUPPLIED FINAL FRAME. Preserve the exact same subject identity, appearance, environment, lighting, camera position and visual style. Continue the same action naturally from that exact moment. Do not restart the scene, do not jump in time, do not change location, and do not introduce unrelated subjects.'
+    : 'START THE VIDEO EXACTLY FROM THE USER REQUEST. Keep one continuous scene with one coherent subject, setting and action. No cuts, no scene changes, no time jumps, and no unrelated subjects.';
   return `${text}\n${instruction} This is segment ${i + 1} of ${count} of one continuous video.`.slice(0, 4000);
 }
 
-function framesFor(seconds) {
-  if (seconds === 5) return 121;
-  if (seconds === 10) return 241;
-  return Math.max(25, Math.min(241, Math.round(seconds * 24) + 1));
-}
-
-async function submit(prompt, negative, settings, seconds, signal) {
+async function submit(url, prompt, negative, settings, seconds, signal, reference = null) {
   const payload = {
     prompt,
     negative: [negative, NEGATIVE].filter(Boolean).join(', ').slice(0, 4000),
@@ -53,11 +48,15 @@ async function submit(prompt, negative, settings, seconds, signal) {
     aspect: settings.aspect,
     width: settings.width,
     height: settings.height,
-    num_frames: framesFor(seconds),
+    num_frames: 121,
     frame_rate: settings.fps,
-    enhance_prompt: true
+    enhance_prompt: false
   };
-  const r = await fetch(TEXT_URL, { method: 'POST', signal, headers: { 'Content-Type': 'application/json', 'Ocp-Apim-Subscription-Key': PIXAZO_API_KEY }, body: JSON.stringify(payload) });
+  if (reference) {
+    payload.image_url = reference;
+    payload.strength = 1.0;
+  }
+  const r = await fetch(url, { method: 'POST', signal, headers: { 'Content-Type': 'application/json', 'Ocp-Apim-Subscription-Key': PIXAZO_API_KEY }, body: JSON.stringify(payload) });
   const d = await r.json().catch(() => ({}));
   if (!r.ok) throw new Error(d?.message || d?.error || d?.detail || `Pixazo rechazó la solicitud (HTTP ${r.status}).`);
   const id = d.request_id || d.requestId;
@@ -104,7 +103,11 @@ async function hasRealMotion(source) {
 async function normalize(source, target, fps, seconds) {
   if (!ffmpegPath) throw new Error('FFmpeg no está disponible para normalizar el vídeo.');
   const duration = Math.max(1, Number(seconds) || 5);
-  await execFileAsync(ffmpegPath, ['-y', '-i', source, '-map', '0:v:0', '-vf', `fps=${fps},tpad=stop_mode=clone:stop_duration=${duration}`, '-t', String(duration), '-an', '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '20', '-pix_fmt', 'yuv420p', target], { maxBuffer: 1024 * 1024 });
+  await execFileAsync(ffmpegPath, ['-y', '-i', source, '-map', '0:v:0', '-vf', `fps=${fps}`, '-t', String(duration), '-an', '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '20', '-pix_fmt', 'yuv420p', target], { maxBuffer: 1024 * 1024 });
+}
+
+async function lastFrame(video, image) {
+  await execFileAsync(ffmpegPath, ['-y', '-sseof', '-0.12', '-i', video, '-frames:v', '1', '-q:v', '2', image], { maxBuffer: 1024 * 1024 });
 }
 
 async function concat(clips, output) {
@@ -117,15 +120,20 @@ async function concat(clips, output) {
 
 async function mux(video, audio, output, seconds) {
   await execFileAsync(ffmpegPath, ['-y', '-i', video, '-stream_loop', '-1', '-i', audio, '-map', '0:v:0', '-map', '1:a:0', '-t', String(seconds), '-c:v', 'copy', '-c:a', 'aac', '-b:a', '128k', '-movflags', '+faststart', output], { maxBuffer: 1024 * 1024 });
+  const { stdout } = await execFileAsync(ffmpegPath, ['-v', 'error', '-i', output, '-select_streams', 'a:0', '-show_entries', 'stream=codec_type', '-of', 'csv=p=0'], { maxBuffer: 1024 * 1024 });
+  if (!stdout.trim()) throw new Error('El audio se generó pero no quedó incorporado al vídeo final.');
 }
 
-async function generateSegment(job, body, settings, work, index, count, seconds) {
+async function generateSegment(job, body, settings, work, index, count, seconds, reference) {
   job.currentScene = index + 1;
   job.totalScenes = count;
-  job.detail = `Generando segmento ${index + 1} de ${count} (${seconds} s) con movimiento real…`;
+  job.detail = reference
+    ? `Generando escena ${index + 1} de ${count} desde el último fotograma…`
+    : `Generando escena ${index + 1} de ${count}…`;
   const controller = new AbortController();
   job.controller = controller;
-  const id = await submit(promptFor(body.prompt, index, count), body.negative, settings, seconds, controller.signal);
+  const useImage = Boolean(reference);
+  const id = await submit(useImage ? IMAGE_URL : TEXT_URL, promptFor(body.prompt, index, count, useImage), body.negative, settings, seconds, controller.signal, reference);
   job.providerRequestId = id;
   const media = await waitFor(id, controller.signal, job);
   const raw = path.join(work, `raw-${index}.mp4`);
@@ -133,7 +141,7 @@ async function generateSegment(job, body, settings, work, index, count, seconds)
   await download(media, raw);
   if (!(await hasRealMotion(raw))) {
     await fs.rm(raw, { force: true });
-    throw Object.assign(new Error(`El motor devolvió un segmento sin movimiento real (${seconds} s).`), { code: 'STATIC_VIDEO' });
+    throw Object.assign(new Error(`El motor devolvió una escena sin movimiento real (${seconds} s).`), { code: 'STATIC_VIDEO' });
   }
   await normalize(raw, clip, settings.fps, seconds);
   await fs.rm(raw, { force: true });
@@ -148,31 +156,25 @@ async function run(job, body) {
   const clips = [];
   let audioPath = '';
   try {
-    if (total === 10) {
-      try {
-        clips.push(await generateSegment(job, body, settings, work, 0, 1, 10));
-      } catch (error) {
-        if (error?.code !== 'STATIC_VIDEO') throw error;
-        job.detail = 'El clip de 10 s llegó congelado. Generando dos segmentos de 5 s con movimiento real…';
-        clips.length = 0;
-        clips.push(await generateSegment(job, body, settings, work, 0, 2, 5));
-        clips.push(await generateSegment(job, body, settings, work, 1, 2, 5));
-      }
-    } else {
-      let remaining = total;
-      let index = 0;
-      const count = Math.ceil(total / 10);
-      while (remaining > 0) {
-        const seconds = Math.min(10, remaining);
-        clips.push(await generateSegment(job, body, settings, work, index, count, seconds));
-        remaining -= seconds;
-        index += 1;
+    const count = Math.ceil(total / 5);
+    let reference = null;
+    for (let i = 0; i < count; i += 1) {
+      const seconds = i === count - 1 && total % 5 !== 0 ? total % 5 : 5;
+      const clip = await generateSegment(job, body, settings, work, i, count, seconds, reference);
+      clips.push(clip);
+      if (i < count - 1) {
+        const frame = path.join(work, `frame-${i}.jpg`);
+        await lastFrame(clip, frame);
+        const publicName = `sequence-${job.id}-${i + 1}.jpg`;
+        await fs.mkdir(generatedDir, { recursive: true });
+        await fs.copyFile(frame, path.join(generatedDir, publicName));
+        reference = new URL(`/generated/${publicName}`, `${String(job.req.get('x-forwarded-proto') || job.req.protocol || 'https').split(',')[0]}://${job.req.get('host')}`).toString();
       }
     }
 
     await fs.mkdir(generatedDir, { recursive: true });
     const silent = path.join(work, 'silent.mp4');
-    job.detail = 'Uniendo el vídeo final…';
+    job.detail = 'Uniendo las escenas con continuidad…';
     await concat(clips, silent);
 
     const narration = String(body.audioText || '').trim().slice(0, 4000);
