@@ -159,6 +159,44 @@ export async function setupPayPalPlans() {
   return { productId, creatorPlanId, proPlanId };
 }
 
+const PAYPAL_WEBHOOK_EVENTS = [
+  'PAYMENT.SALE.COMPLETED',
+  'BILLING.SUBSCRIPTION.ACTIVATED',
+  'BILLING.SUBSCRIPTION.UPDATED',
+  'BILLING.SUBSCRIPTION.CANCELLED',
+  'BILLING.SUBSCRIPTION.EXPIRED',
+  'BILLING.SUBSCRIPTION.SUSPENDED',
+  'BILLING.SUBSCRIPTION.PAYMENT.FAILED'
+];
+
+export async function setupPayPalWebhook() {
+  if (!paypalCredentialsConfigured()) {
+    throw new Error('Faltan PAYPAL_CLIENT_ID y/o PAYPAL_CLIENT_SECRET.');
+  }
+
+  const url = `${process.env.PUBLIC_APP_URL || 'https://sala-de-proyeccion.onrender.com'}/api/billing/webhook`;
+  const list = await paypalRequest('/v1/notifications/webhooks?page_size=20&page=1', { method: 'GET' });
+  const existing = Array.isArray(list?.webhooks)
+    ? list.webhooks.find((webhook) => webhook.url === url)
+    : null;
+
+  if (existing?.id) {
+    return { webhookId: existing.id, url, created: false, eventTypes: existing.event_types || [] };
+  }
+
+  const created = await paypalRequest('/v1/notifications/webhooks', {
+    method: 'POST',
+    headers: { 'PayPal-Request-Id': 'sala-de-proyeccion-webhook-v1' },
+    body: JSON.stringify({
+      url,
+      event_types: PAYPAL_WEBHOOK_EVENTS.map((name) => ({ name }))
+    })
+  });
+
+  if (!created?.id) throw new Error('PayPal no devolvió el ID del webhook.');
+  return { webhookId: created.id, url, created: true, eventTypes: created.event_types || PAYPAL_WEBHOOK_EVENTS.map((name) => ({ name })) };
+}
+
 export async function createPayPalSubscription({ planId, accountId, email }) {
   const paypalPlan = paypalPlanId(planId);
   if (!paypalPlan) throw new Error('Plan de PayPal no configurado.');
