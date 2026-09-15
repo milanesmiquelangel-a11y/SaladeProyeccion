@@ -2,7 +2,7 @@ import express from 'express';
 import { BILLING_CONFIG, billingIsConfigured } from './billing-config.js';
 import { creditAccount } from './billing-ledger.js';
 import { dbQuery } from './database.js';
-import { createPayPalSubscription, getPayPalSubscription, paypalConfigured, paypalPlanId, paypalStatus, verifyPayPalWebhook } from './paypal-billing.js';
+import { createPayPalSubscription, getPayPalSubscription, paypalConfigured, paypalPlanId, paypalStatus, setupPayPalPlans, verifyPayPalWebhook } from './paypal-billing.js';
 
 const router = express.Router();
 
@@ -34,6 +34,26 @@ router.get('/status', (_req, res) => {
       planConfigured: Boolean(paypalPlanId(id))
     }]))
   });
+});
+
+// One-time setup helper for Render Free instances where Shell is unavailable.
+// The authentication bridge supplies x-sala-user-id from the active session.
+router.get('/paypal/setup', async (req, res) => {
+  const accountId = String(req.get('x-sala-user-id') || '').trim();
+  if (!accountId || !/^[a-zA-Z0-9_-]{16,80}$/.test(accountId)) {
+    return res.status(401).json({ error: 'Inicia sesión en Sala de Proyección antes de ejecutar la configuración de PayPal.' });
+  }
+  try {
+    const result = await setupPayPalPlans();
+    return res.json({
+      ok: true,
+      message: 'Planes de PayPal creados o encontrados. Copia estos tres IDs a las variables de Render.',
+      ...result
+    });
+  } catch (error) {
+    console.error('PayPal setup error:', error);
+    return res.status(502).json({ error: error.message || 'No se pudieron crear los planes de PayPal.' });
+  }
 });
 
 router.post('/checkout', configured, async (req, res) => {
