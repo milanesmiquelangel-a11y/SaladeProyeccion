@@ -1,4 +1,5 @@
 import express from 'express';
+import './auth-bridge.js';
 import './image-video-entry.js';
 import billingRouter from './billing-routes.js';
 import { mountAudioApi } from './audio-api.js';
@@ -25,7 +26,7 @@ function generationCost(req) {
 
 async function billingMiddleware(req, res, next) {
   const id = userId(req);
-  if (!id) return res.status(400).json({ error: 'Falta el identificador de cuenta. Recarga la página e inténtalo de nuevo.' });
+  if (!id) return res.status(401).json({ error: 'Debes registrarte o iniciar sesión antes de generar vídeos.' });
   if (!databaseConfigured()) return res.status(503).json({ error: 'La facturación necesita una base de datos PostgreSQL de Render. Configura DATABASE_URL antes de generar vídeos.', billingPersistence: false });
   const cost = generationCost(req);
   try {
@@ -41,9 +42,7 @@ async function billingMiddleware(req, res, next) {
     });
     return next();
   } catch (error) {
-    if (error.code === 'INSUFFICIENT_CREDITS') {
-      return res.status(402).json({ error: error.message, credits: error.credits, required: error.required, nextRechargeAt: error.nextRechargeAt });
-    }
+    if (error.code === 'INSUFFICIENT_CREDITS') return res.status(402).json({ error: error.message, credits: error.credits, required: error.required, nextRechargeAt: error.nextRechargeAt });
     console.error('Billing reservation error:', error);
     return res.status(503).json({ error: 'No se pudo reservar el crédito de esta generación. Inténtalo de nuevo.', billingPersistence: true });
   }
@@ -62,42 +61,30 @@ express.application.get = function patchedGet(route, ...handlers) {
   if (route === '/api/health') {
     originalGet.call(this, '/api/billing/balance', async (req, res) => {
       const id = userId(req);
-      if (!id) return res.status(400).json({ error: 'Cuenta no identificada.' });
+      if (!id) return res.status(401).json({ error: 'Debes registrarte o iniciar sesión.' });
       if (!databaseConfigured()) return res.status(503).json({ error: 'Base de datos no configurada.', billingPersistence: false });
       try {
         await recoverStaleGenerationReservations(id);
         const account = await getAccount(id);
         return res.json({ credits: account.credits, plan: account.plan, totalConsumed: account.totalConsumed, nextRechargeAt: account.plan === 'Gratis' ? account.nextRechargeAt : null, freeRechargeCredits: FREE_CREDITS });
-      } catch (error) {
-        console.error('Billing balance error:', error);
-        return res.status(503).json({ error: 'No se pudo consultar el saldo.' });
-      }
+      } catch (error) { console.error('Billing balance error:', error); return res.status(503).json({ error: 'No se pudo consultar el saldo.' }); }
     });
     originalGet.call(this, '/api/billing/transactions', async (req, res) => {
       const id = userId(req);
-      if (!id) return res.status(400).json({ error: 'Cuenta no identificada.' });
+      if (!id) return res.status(401).json({ error: 'Debes registrarte o iniciar sesión.' });
       if (!databaseConfigured()) return res.status(503).json({ error: 'Base de datos no configurada.', billingPersistence: false });
       try {
         const result = await dbQuery(`SELECT id, type, route, cost, credits, status, payment_id AS "paymentId", related_transaction_id AS "relatedTransactionId", reason, created_at AS "createdAt", completed_at AS "completedAt", refunded_at AS "refundedAt" FROM sala_transactions WHERE user_id = $1 ORDER BY created_at DESC LIMIT 50`, [id]);
         return res.json({ transactions: result.rows });
-      } catch (error) {
-        console.error('Billing transactions error:', error);
-        return res.status(503).json({ error: 'No se pudo consultar el historial de créditos.' });
-      }
+      } catch (error) { console.error('Billing transactions error:', error); return res.status(503).json({ error: 'No se pudo consultar el historial de créditos.' }); }
     });
   }
   return result;
 };
 
 express.application.listen = function patchedListen(...args) {
-  if (!this._salaBillingMounted) {
-    this.use('/api/billing', billingRouter);
-    this._salaBillingMounted = true;
-  }
-  if (!this._salaAudioMounted) {
-    mountAudioApi(this);
-    this._salaAudioMounted = true;
-  }
+  if (!this._salaBillingMounted) { this.use('/api/billing', billingRouter); this._salaBillingMounted = true; }
+  if (!this._salaAudioMounted) { mountAudioApi(this); this._salaAudioMounted = true; }
   return originalListen.apply(this, args);
 };
 
@@ -108,25 +95,13 @@ const PIXAZO_STATUS_RETRIES = 2;
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 async function fetchWithTimeout(input, init, timeoutMs) {
-  const controller = new AbortController();
-  let timedOut = false;
+  const controller = new AbortController(); let timedOut = false;
   const timer = setTimeout(() => { timedOut = true; controller.abort(); }, timeoutMs);
-  const callerSignal = init?.signal;
-  const abortFromCaller = () => controller.abort();
-  if (callerSignal) {
-    if (callerSignal.aborted) controller.abort();
-    else callerSignal.addEventListener('abort', abortFromCaller, { once: true });
-  }
-  try {
-    return await nativeFetch(input, { ...init, signal: controller.signal });
-  } catch (error) {
-    if (callerSignal?.aborted) throw error;
-    if (timedOut) throw Object.assign(new Error('La consulta de estado de Pixazo tardó demasiado.'), { code: 'PIXAZO_STATUS_TIMEOUT' });
-    throw error;
-  } finally {
-    clearTimeout(timer);
-    callerSignal?.removeEventListener('abort', abortFromCaller);
-  }
+  const callerSignal = init?.signal; const abortFromCaller = () => controller.abort();
+  if (callerSignal) { if (callerSignal.aborted) controller.abort(); else callerSignal.addEventListener('abort', abortFromCaller, { once: true }); }
+  try { return await nativeFetch(input, { ...init, signal: controller.signal }); }
+  catch (error) { if (callerSignal?.aborted) throw error; if (timedOut) throw Object.assign(new Error('La consulta de estado de Pixazo tardó demasiado.'), { code: 'PIXAZO_STATUS_TIMEOUT' }); throw error; }
+  finally { clearTimeout(timer); callerSignal?.removeEventListener('abort', abortFromCaller); }
 }
 
 globalThis.fetch = async (input, init = {}) => {
@@ -137,14 +112,8 @@ globalThis.fetch = async (input, init = {}) => {
   if (!isStatusPoll) return nativeFetch(input, init);
   let lastError = null;
   for (let attempt = 0; attempt <= PIXAZO_STATUS_RETRIES; attempt += 1) {
-    try {
-      const response = await fetchWithTimeout(input, init, PIXAZO_STATUS_TIMEOUT_MS);
-      if (response.status !== 429 && response.status < 500) return response;
-      lastError = new Error(`Pixazo devolvió HTTP ${response.status} al consultar el estado.`);
-    } catch (error) {
-      if (init.signal?.aborted) throw error;
-      lastError = error;
-    }
+    try { const response = await fetchWithTimeout(input, init, PIXAZO_STATUS_TIMEOUT_MS); if (response.status !== 429 && response.status < 500) return response; lastError = new Error(`Pixazo devolvió HTTP ${response.status} al consultar el estado.`); }
+    catch (error) { if (init.signal?.aborted) throw error; lastError = error; }
     if (attempt < PIXAZO_STATUS_RETRIES) await sleep(2000 * (attempt + 1));
   }
   throw lastError || new Error('No se pudo consultar el estado de Pixazo.');
