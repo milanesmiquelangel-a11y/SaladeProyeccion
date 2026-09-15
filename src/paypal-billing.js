@@ -68,8 +68,11 @@ export async function paypalRequest(path, options = {}) {
   const response = await fetch(`${PAYPAL_BASE_URL}${path}`, { ...options, headers });
   const data = await response.json().catch(() => ({}));
   if (!response.ok) {
-    const detail = data?.details?.[0]?.description || data?.message || data?.name;
-    throw new Error(detail || `PayPal respondió HTTP ${response.status}.`);
+    const detail = data?.details?.[0];
+    const description = detail?.description || data?.message || data?.name;
+    const field = detail?.field ? ` Campo: ${detail.field}.` : '';
+    const debug = data?.debug_id ? ` (debug_id: ${data.debug_id})` : '';
+    throw new Error(`${description || `PayPal respondió HTTP ${response.status}.`}${field}${debug}`);
   }
   return data;
 }
@@ -78,6 +81,13 @@ export function paypalPlanId(planId) {
   if (planId === 'creator') return process.env.PAYPAL_CREATOR_PLAN_ID || null;
   if (planId === 'pro') return process.env.PAYPAL_PRO_PLAN_ID || null;
   return null;
+}
+
+async function activatePayPalPlan(planId) {
+  return paypalRequest(`/v1/billing/plans/${encodeURIComponent(planId)}/activate`, {
+    method: 'POST',
+    body: JSON.stringify({})
+  });
 }
 
 export async function setupPayPalPlans() {
@@ -113,34 +123,50 @@ export async function setupPayPalPlans() {
   });
   const existingPlans = Array.isArray(planResponse?.plans) ? planResponse.plans : [];
 
-  async function ensurePlan(planId, name, description, price) {
-    if (planId) return planId;
-    const existing = existingPlans.find((item) => item.name === name && item.product_id === productId);
-    if (existing?.id) return existing.id;
+  async function ensurePlan(configuredPlanId, name, description, price) {
+    let planId = configuredPlanId || null;
+    let existing = planId ? existingPlans.find((item) => item.id === planId) : null;
+    if (!existing) existing = existingPlans.find((item) => item.name === name && item.product_id === productId);
+    if (!planId && existing?.id) planId = existing.id;
 
-    const created = await paypalRequest('/v1/billing/plans', {
-      method: 'POST',
-      headers: { 'PayPal-Request-Id': `sala-de-proyeccion-${planId || name.toLowerCase().replace(/[^a-z0-9]+/g, '-')}-v1` },
-      body: JSON.stringify({
-        product_id: productId,
-        name,
-        description,
-        billing_cycles: [{
-          frequency: { interval_unit: 'MONTH', interval_count: 1 },
-          tenure_type: 'REGULAR',
-          sequence: 1,
-          total_cycles: 0,
-          pricing_scheme: {
-            fixed_price: { value: price, currency_code: process.env.BILLING_CURRENCY || 'EUR' }
+    if (!planId) {
+      const created = await paypalRequest('/v1/billing/plans', {
+        method: 'POST',
+        headers: { 'PayPal-Request-Id': `sala-de-proyeccion-${name.toLowerCase().replace(/[^a-z0-9]+/g, '-')}-v2` },
+        body: JSON.stringify({
+          product_id: productId,
+          name,
+          description,
+          billing_cycles: [{
+            frequency: { interval_unit: 'MONTH', interval_count: 1 },
+            tenure_type: 'REGULAR',
+            sequence: 1,
+            total_cycles: 0,
+            pricing_scheme: {
+              fixed_price: { value: price, currency_code: process.env.BILLING_CURRENCY || 'EUR' }
+            }
+          }],
+          payment_preferences: {
+            auto_bill_outstanding: true,
+            payment_failure_threshold: 1
           }
-        }],
-        payment_preferences: {
-          auto_bill_outstanding: true,
-          payment_failure_threshold: 1
-        }
-      })
-    });
-    return created?.id || null;
+        })
+      });
+      planId = created?.id || null;
+      existing = created;
+    }
+
+    if (!planId) throw new Error(`PayPal no devolvió el ID del plan ${name}.`);
+
+    const status = String(existing?.status || '').toUpperCase();
+    if (status !== 'ACTIVE') {
+      try {
+        await activatePayPalPlan(planId);
+      } catch (error) {
+        if (!/already active|active plan|invalid plan status/i.test(String(error.message || ''))) throw error;
+      }
+    }
+    return planId;
   }
 
   const creatorPlanId = await ensurePlan(
