@@ -131,6 +131,22 @@ async function resolvePayPalPlan(planId) {
   return found.id;
 }
 
+export async function paypalPlanKind(planId) {
+  if (!planId) return null;
+  if (planId === process.env.PAYPAL_CREATOR_PLAN_ID) return 'creator';
+  if (planId === process.env.PAYPAL_PRO_PLAN_ID) return 'pro';
+
+  try {
+    const plan = await paypalRequest(`/v1/billing/plans/${encodeURIComponent(planId)}`, { method: 'GET' });
+    const name = String(plan?.name || '');
+    if (name === 'Sala de Proyección Creador') return 'creator';
+    if (name === 'Sala de Proyección Pro') return 'pro';
+  } catch (_error) {
+    // Unknown plan; webhook caller will ignore it safely.
+  }
+  return null;
+}
+
 export async function setupPayPalPlans() {
   if (!paypalCredentialsConfigured()) {
     throw new Error('Faltan PAYPAL_CLIENT_ID y/o PAYPAL_CLIENT_SECRET.');
