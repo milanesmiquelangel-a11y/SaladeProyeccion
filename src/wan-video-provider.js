@@ -43,7 +43,8 @@ function outputReference(data) {
       data.path,
       data.video?.url,
       data.video?.path,
-      data.data
+      data.data,
+      data.video?.data
     ]) {
       const found = outputReference(candidate);
       if (found) return found;
@@ -85,53 +86,29 @@ export async function generateWanVideo({ prompt, negative, aspect = '16:9', job 
   const app = await getClient();
   const api = await app.view_api();
   const endpoint = chooseEndpoint(api);
-  job.providerState = 'QUEUED';
+  const inputs = buildInputs(endpoint, prompt, negative, aspect);
+
+  job.providerState = 'PROCESSING';
   job.providerEndpoint = endpoint;
-  job.detail = `WAN 2.1 conectado (${endpoint}). Enviando el prompt…`;
+  job.detail = `WAN 2.1 conectado (${endpoint}). Generando el vídeo…`;
 
-  const submission = app.submit(endpoint, buildInputs(endpoint, prompt, negative, aspect));
-  job.gradioJob = submission;
-
-  let finalData = null;
-  let lastStatus = null;
-
-  for await (const message of submission) {
-    if (message.type === 'status') {
-      lastStatus = message.status || message;
-      const status = message.status || {};
-      const stage = String(status.stage || status.status || 'PROCESSING').toUpperCase();
-      job.providerState = stage;
-
-      if (stage === 'ERROR' || status.success === false) {
-        const reason = status.message || status.code || 'El Space de WAN informó un error.';
-        throw new Error(`WAN 2.1 informó un error: ${reason}`);
-      }
-
-      if (status.position != null) job.detail = `WAN 2.1 está en cola (posición ${status.position})…`;
-      else if (status.eta != null) job.detail = `WAN 2.1 está procesando (estimación ${Math.ceil(status.eta)} s)…`;
-      else job.detail = 'WAN 2.1 está generando el vídeo…';
-    }
-
-    if (message.type === 'data') finalData = message.data;
-  }
-
-  // Some Gradio client versions complete the async iterator without exposing
-  // the final FileData in a data event. Ask the Job for its authoritative result.
-  if (!outputReference(finalData)) {
-    try {
-      const result = await submission.result();
-      finalData = result?.data ?? result;
-    } catch (error) {
-      const reason = error?.message || String(error);
-      throw new Error(`WAN 2.1 terminó sin entregar el archivo. ${reason}`);
-    }
+  // The public WAN Space returns a single Video/FileData result. Using
+  // predict() is deliberate here: it waits for the authoritative final
+  // response instead of depending on the async event stream to expose the
+  // final FileData object. Gradio documents predict() as the direct API for
+  // endpoints that return one final value.
+  let result;
+  try {
+    result = await app.predict(endpoint, inputs);
+  } catch (error) {
+    const reason = error?.message || String(error);
+    throw new Error(`WAN 2.1 no pudo generar el vídeo: ${reason}`);
   }
 
   job.gradioJob = null;
-  const reference = outputReference(finalData);
+  const reference = outputReference(result?.data ?? result);
   if (!reference) {
-    const statusText = lastStatus ? ` Estado final: ${JSON.stringify(lastStatus).slice(0, 800)}` : '';
-    throw new Error(`WAN 2.1 terminó, pero no se pudo localizar el archivo de vídeo. Respuesta: ${JSON.stringify(finalData).slice(0, 1200)}.${statusText}`);
+    throw new Error(`WAN 2.1 terminó, pero la respuesta no contiene un vídeo. Respuesta: ${JSON.stringify(result).slice(0, 1600)}`);
   }
 
   if (/^https?:\/\//i.test(reference)) {
