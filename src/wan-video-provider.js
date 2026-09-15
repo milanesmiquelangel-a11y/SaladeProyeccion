@@ -1,10 +1,12 @@
 import { Client } from '@gradio/client';
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import { randomUUID } from 'node:crypto';
 
 const SPACE = process.env.WAN_SPACE_ID || 'fffiloni/Wan2.1';
 const CONFIGURED_ENDPOINT = String(process.env.WAN_ENDPOINT || '').trim();
 const HF_TOKEN = process.env.HF_TOKEN || undefined;
+const generatedDir = path.join(process.cwd(), 'public', 'generated');
 let clientPromise;
 
 async function getClient() {
@@ -52,6 +54,18 @@ function buildInputs(endpoint, prompt, negative, aspect) {
   return [prompt, resolution, Number(process.env.WAN_STEPS || 20), Number(process.env.WAN_GUIDE_SCALE || 6), Number(process.env.WAN_SHIFT_SCALE || 8), -1, String(negative || '')];
 }
 
+async function publishLocalVideo(reference) {
+  const resolved = path.isAbsolute(reference) ? reference : path.resolve(process.cwd(), reference);
+  const stat = await fs.stat(resolved);
+  if (!stat.isFile()) throw new Error('La salida WAN no es un archivo.');
+  await fs.mkdir(generatedDir, { recursive: true });
+  const name = `wan-${randomUUID()}.mp4`;
+  const destination = path.join(generatedDir, name);
+  await fs.copyFile(resolved, destination);
+  const port = Number(process.env.PORT || 3000);
+  return `http://127.0.0.1:${port}/generated/${name}`;
+}
+
 export async function generateWanVideo({ prompt, negative, aspect = '16:9', job }) {
   const app = await getClient();
   const api = await app.view_api();
@@ -80,19 +94,14 @@ export async function generateWanVideo({ prompt, negative, aspect = '16:9', job 
   if (!reference) {
     throw new Error(`WAN 2.1 terminó, pero no se pudo localizar el archivo de vídeo. Respuesta: ${JSON.stringify(finalData).slice(0, 1200)}`);
   }
-  if (!/^https?:\/\//i.test(reference)) {
-    const resolved = path.isAbsolute(reference) ? reference : path.resolve(process.cwd(), reference);
-    try {
-      const stat = await fs.stat(resolved);
-      if (!stat.isFile()) throw new Error('La salida WAN no es un archivo.');
-      job.detail = 'WAN 2.1 terminó; preparando el vídeo generado…';
-      return resolved;
-    } catch (error) {
-      throw new Error(`WAN 2.1 devolvió una ruta de vídeo que no existe en el servidor: ${reference}`);
-    }
+  if (/^https?:\/\//i.test(reference)) {
+    job.providerState = 'COMPLETED';
+    return reference;
   }
+  const published = await publishLocalVideo(reference);
   job.providerState = 'COMPLETED';
-  return reference;
+  job.detail = 'WAN 2.1 terminó; vídeo preparado para FFmpeg…';
+  return published;
 }
 
 export function cancelWanVideo(job) {
