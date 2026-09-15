@@ -8,7 +8,10 @@ import { randomUUID } from 'node:crypto';
 // server therefore produced the exact "Error executing command" seen by users.
 // Use a public ZeroGPU T2V 1.3B Space instead. It keeps WAN 2.1 and does not
 // require us to run the model on Render.
-const SPACE = process.env.WAN_SPACE_ID || '0AstroKnight0/wan2.1-t2v-1.3b-demo';
+const configuredSpace = String(process.env.WAN_SPACE_ID || '').trim();
+const SPACE = configuredSpace && configuredSpace !== 'fffiloni/Wan2.1'
+  ? configuredSpace
+  : '0AstroKnight0/wan2.1-t2v-1.3b-demo';
 const CONFIGURED_ENDPOINT = String(process.env.WAN_ENDPOINT || '').trim();
 const HF_TOKEN = process.env.HF_TOKEN || undefined;
 const generatedDir = path.join(process.cwd(), 'public', 'generated');
@@ -98,7 +101,6 @@ function buildInputs(endpointInfo, prompt, negative, aspect) {
 
   for (const parameter of parameters) {
     const name = parameterName(parameter);
-    const label = String(parameter?.label || '').toLowerCase();
     let value;
 
     if (name.includes('prompt') && !name.includes('negative')) value = prompt;
@@ -120,9 +122,6 @@ function buildInputs(endpointInfo, prompt, negative, aspect) {
     else if (parameter?.type === 'string' || parameter?.component === 'Textbox') value = '';
     else value = null;
 
-    // Avoid unused label lint noise while keeping compatibility with older
-    // Gradio API metadata that exposes label instead of parameter_name.
-    void label;
     values.push(value);
   }
 
