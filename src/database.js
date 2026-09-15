@@ -10,45 +10,22 @@ function connectionSslMode(url) {
     const explicit = String(parsed.searchParams.get('sslmode') || '').toLowerCase();
     if (explicit === 'disable') return 'disable';
     if (explicit === 'require' || explicit === 'verify-ca' || explicit === 'verify-full') return 'require';
-  } catch {
-    // Let pg report malformed connection strings through the normal health check.
-  }
+  } catch {}
   if (process.env.DATABASE_SSL === 'false') return 'disable';
   if (process.env.DATABASE_SSL === 'true') return 'require';
   return null;
 }
 
 const sslMode = connectionSslMode(connectionString);
-const pool = connectionString
-  ? new Pool({
-      connectionString,
-      max: 5,
-      idleTimeoutMillis: 30000,
-      connectionTimeoutMillis: 5000,
-      // Render internal PostgreSQL URLs do not require TLS. External URLs
-      // normally include ?sslmode=require. Respect the URL instead of forcing
-      // SSL on every connection.
-      ssl: sslMode === 'require' ? { rejectUnauthorized: false } : undefined
-    })
-  : null;
-
+const pool = connectionString ? new Pool({ connectionString, max: 5, idleTimeoutMillis: 30000, connectionTimeoutMillis: 5000, ssl: sslMode === 'require' ? { rejectUnauthorized: false } : undefined }) : null;
 let schemaPromise = null;
 
-export function databaseConfigured() {
-  return Boolean(pool);
-}
+export function databaseConfigured() { return Boolean(pool); }
 
 export async function checkDatabase() {
   if (!pool) return { configured: false, connected: false, error: 'DATABASE_URL no está configurada.' };
-  try {
-    await ensureSchema();
-    await pool.query('SELECT 1');
-    return { configured: true, connected: true, error: null };
-  } catch (error) {
-    console.error('PostgreSQL health check error:', error);
-    const code = error?.code ? ` [${error.code}]` : '';
-    return { configured: true, connected: false, error: `${error?.message || 'No se pudo conectar con PostgreSQL.'}${code}` };
-  }
+  try { await ensureSchema(); await pool.query('SELECT 1'); return { configured: true, connected: true, error: null }; }
+  catch (error) { console.error('PostgreSQL health check error:', error); const code = error?.code ? ` [${error.code}]` : ''; return { configured: true, connected: false, error: `${error?.message || 'No se pudo conectar con PostgreSQL.'}${code}` }; }
 }
 
 export async function dbQuery(text, params = []) {
@@ -61,17 +38,9 @@ export async function withTransaction(callback) {
   if (!pool) throw new Error('DATABASE_URL no está configurada. Conecta una base de datos PostgreSQL de Render.');
   await ensureSchema();
   const client = await pool.connect();
-  try {
-    await client.query('BEGIN');
-    const result = await callback(client);
-    await client.query('COMMIT');
-    return result;
-  } catch (error) {
-    await client.query('ROLLBACK').catch(() => {});
-    throw error;
-  } finally {
-    client.release();
-  }
+  try { await client.query('BEGIN'); const result = await callback(client); await client.query('COMMIT'); return result; }
+  catch (error) { await client.query('ROLLBACK').catch(() => {}); throw error; }
+  finally { client.release(); }
 }
 
 export async function ensureSchema() {
@@ -79,6 +48,21 @@ export async function ensureSchema() {
   if (!schemaPromise) {
     schemaPromise = (async () => {
       await pool.query(`
+        CREATE TABLE IF NOT EXISTS sala_users (
+          id TEXT PRIMARY KEY,
+          email TEXT NOT NULL UNIQUE,
+          password_hash TEXT NOT NULL,
+          password_salt TEXT NOT NULL,
+          created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        );
+        CREATE TABLE IF NOT EXISTS sala_sessions (
+          token_hash TEXT PRIMARY KEY,
+          user_id TEXT NOT NULL REFERENCES sala_users(id) ON DELETE CASCADE,
+          expires_at TIMESTAMPTZ NOT NULL,
+          created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        );
+        CREATE INDEX IF NOT EXISTS sala_sessions_user_idx ON sala_sessions(user_id);
+        CREATE INDEX IF NOT EXISTS sala_sessions_expires_idx ON sala_sessions(expires_at);
         CREATE TABLE IF NOT EXISTS sala_accounts (
           user_id TEXT PRIMARY KEY,
           credits INTEGER NOT NULL DEFAULT 3,
@@ -117,14 +101,9 @@ export async function ensureSchema() {
           created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
         );
       `);
-    })().catch((error) => {
-      schemaPromise = null;
-      throw error;
-    });
+    })().catch((error) => { schemaPromise = null; throw error; });
   }
   return schemaPromise;
 }
 
-export async function closeDatabase() {
-  if (pool) await pool.end();
-}
+export async function closeDatabase() { if (pool) await pool.end(); }
