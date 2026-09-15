@@ -7,46 +7,34 @@ const FREE_RECHARGE_HOURS = 24;
 export { databaseConfigured };
 
 function accountFromRow(row) {
-  return {
-    credits: Number(row.credits || 0),
-    plan: row.plan || 'Gratis',
-    totalConsumed: Number(row.total_consumed || 0),
-    createdAt: new Date(row.created_at).getTime(),
-    nextRechargeAt: row.next_recharge_at ? new Date(row.next_recharge_at).getTime() : null
-  };
+  return { credits: Number(row.credits || 0), plan: row.plan || 'Gratis', totalConsumed: Number(row.total_consumed || 0), createdAt: new Date(row.created_at).getTime(), nextRechargeAt: row.next_recharge_at ? new Date(row.next_recharge_at).getTime() : null };
 }
 
 async function ensureAccount(client, userId) {
   const existing = await client.query('SELECT * FROM sala_accounts WHERE user_id = $1 FOR UPDATE', [userId]);
   if (existing.rowCount) {
     const row = existing.rows[0];
-    // Migrate legacy free accounts to the current one-time 3-credit grant.
-    // Also correct untouched accounts that were created with the old 30-credit grant.
     if (row.plan === 'Gratis' && Number(row.credits) === 30 && Number(row.total_consumed || 0) === 0) {
       row.credits = FREE_CREDITS;
       row.next_recharge_at = new Date(new Date(row.created_at).getTime() + FREE_RECHARGE_HOURS * 60 * 60 * 1000);
       await client.query('UPDATE sala_accounts SET credits = $2, next_recharge_at = $3 WHERE user_id = $1', [userId, FREE_CREDITS, row.next_recharge_at]);
     }
-
-    // Free accounts receive 3 new credits every 24 hours.
-    // The recharge is granted when the account is accessed, so no external cron is required.
     if (row.plan === 'Gratis') {
       const now = new Date();
       let nextRechargeAt = row.next_recharge_at ? new Date(row.next_recharge_at) : new Date(new Date(row.created_at).getTime() + FREE_RECHARGE_HOURS * 60 * 60 * 1000);
-
       if (now >= nextRechargeAt) {
-        row.credits = Number(row.credits || 0) + FREE_CREDITS;
+        // Free quota is RESTORED TO 3 every 24h. It is never +3 and never exceeds 3.
+        row.credits = FREE_CREDITS;
         row.last_credit_at = now;
         nextRechargeAt = new Date(now.getTime() + FREE_RECHARGE_HOURS * 60 * 60 * 1000);
         row.next_recharge_at = nextRechargeAt;
-        await client.query('UPDATE sala_accounts SET credits = $2, last_credit_at = $3, next_recharge_at = $4 WHERE user_id = $1', [userId, row.credits, now, nextRechargeAt]);
-        await client.query(`INSERT INTO sala_transactions (id, user_id, type, cost, credits, status, reason, created_at) VALUES ($1, $2, 'credit', $3, $4, 'completed', $5, $6)`, [randomUUID(), userId, -FREE_CREDITS, FREE_CREDITS, 'free_daily_recharge', now]);
+        await client.query('UPDATE sala_accounts SET credits = $2, last_credit_at = $3, next_recharge_at = $4 WHERE user_id = $1', [userId, FREE_CREDITS, now, nextRechargeAt]);
+        await client.query(`INSERT INTO sala_transactions (id, user_id, type, cost, credits, status, reason, created_at) VALUES ($1, $2, 'credit', $3, $4, 'completed', $5, $6)`, [randomUUID(), userId, 0, FREE_CREDITS, 'free_daily_restore_to_3', now]);
       } else if (!row.next_recharge_at) {
         row.next_recharge_at = nextRechargeAt;
         await client.query('UPDATE sala_accounts SET next_recharge_at = $2 WHERE user_id = $1', [userId, nextRechargeAt]);
       }
     }
-
     return row;
   }
   const now = new Date();
@@ -57,10 +45,7 @@ async function ensureAccount(client, userId) {
 
 export async function getAccount(userId) {
   if (!userId) throw new Error('Cuenta no identificada.');
-  return withTransaction(async (client) => {
-    const row = await ensureAccount(client, userId);
-    return accountFromRow(row);
-  });
+  return withTransaction(async (client) => accountFromRow(await ensureAccount(client, userId)));
 }
 
 export async function reserveGeneration(userId, cost, route) {
@@ -73,8 +58,7 @@ export async function reserveGeneration(userId, cost, route) {
       error.code = 'INSUFFICIENT_CREDITS'; error.credits = Number(row.credits); error.required = cost; error.nextRechargeAt = row.next_recharge_at ? new Date(row.next_recharge_at).getTime() : null;
       throw error;
     }
-    const transactionId = randomUUID();
-    const now = new Date();
+    const transactionId = randomUUID(); const now = new Date();
     await client.query('UPDATE sala_accounts SET credits = credits - $2, total_consumed = total_consumed + $2, last_generation_at = $3 WHERE user_id = $1', [userId, cost, now]);
     await client.query(`INSERT INTO sala_transactions (id, user_id, type, route, cost, credits, status, created_at) VALUES ($1, $2, 'generation', $3, $4, 0, 'reserved', $5)`, [transactionId, userId, route || null, cost, now]);
     return { transactionId, credits: Number(row.credits) - cost, cost };
@@ -85,11 +69,10 @@ export async function creditAccount(userId, credits, payment = {}) {
   if (!userId || !Number.isInteger(credits) || credits <= 0) throw new Error('Datos de crédito inválidos.');
   return withTransaction(async (client) => {
     if (payment.eventId) { const duplicate = await client.query('SELECT id FROM sala_payments WHERE event_id = $1', [payment.eventId]); if (duplicate.rowCount) return { alreadyProcessed: true }; }
-    const row = await ensureAccount(client, userId);
-    const now = new Date(); const newCredits = Number(row.credits) + credits;
+    const row = await ensureAccount(client, userId); const now = new Date(); const newCredits = Number(row.credits) + credits;
     await client.query('UPDATE sala_accounts SET credits = $2, last_credit_at = $3, plan = COALESCE($4, plan) WHERE user_id = $1', [userId, newCredits, now, payment.plan || null]);
     await client.query(`INSERT INTO sala_transactions (id, user_id, type, cost, credits, status, payment_id, created_at) VALUES ($1, $2, 'credit', $3, $4, 'completed', $5, $6)`, [randomUUID(), userId, -credits, credits, payment.paymentId || null, now]);
-    await client.query(`INSERT INTO sala_payments (id, user_id, provider, event_id, plan, credits, status, created_at) VALUES ($1, $2, 'stripe', $3, $4, $5, 'completed', $6)`, [payment.paymentId || randomUUID(), userId, payment.eventId || null, payment.plan || null, credits, 'completed', now]);
+    await client.query(`INSERT INTO sala_payments (id, user_id, provider, event_id, plan, credits, status, created_at) VALUES ($1, $2, 'stripe', $3, $4, $5, 'completed', $6)`, [payment.paymentId || randomUUID(), userId, payment.eventId || null, payment.plan || null, credits, now]);
     return { alreadyProcessed: false, credits: newCredits };
   });
 }
@@ -107,23 +90,18 @@ export async function refundGeneration(userId, transactionId, reason = 'generati
   if (!userId || !transactionId) return { refunded: false, reason: 'missing_data' };
   return withTransaction(async (client) => {
     const txResult = await client.query('SELECT * FROM sala_transactions WHERE id = $1 AND user_id = $2 AND type = $3 FOR UPDATE', [transactionId, userId, 'generation']);
-    const tx = txResult.rows[0];
-    if (!tx || tx.status === 'refunded' || tx.status === 'completed') return { refunded: false, reason: 'already_finalized_or_missing' };
-    const account = await client.query('SELECT * FROM sala_accounts WHERE user_id = $1 FOR UPDATE', [userId]);
-    if (!account.rowCount) return { refunded: false, reason: 'account_missing' };
+    const tx = txResult.rows[0]; if (!tx || tx.status === 'refunded' || tx.status === 'completed') return { refunded: false, reason: 'already_finalized_or_missing' };
+    const account = await client.query('SELECT * FROM sala_accounts WHERE user_id = $1 FOR UPDATE', [userId]); if (!account.rowCount) return { refunded: false, reason: 'account_missing' };
     const cost = Number(tx.cost || 0);
     await client.query('UPDATE sala_accounts SET credits = credits + $2, total_consumed = GREATEST(0, total_consumed - $2) WHERE user_id = $1', [userId, cost]);
     await client.query('UPDATE sala_transactions SET status = $2, refunded_at = NOW(), reason = $3 WHERE id = $1', [transactionId, 'refunded', reason]);
     await client.query(`INSERT INTO sala_transactions (id, user_id, type, cost, credits, status, related_transaction_id, reason, created_at) VALUES ($1, $2, 'refund', 0, $3, 'completed', $4, $5, NOW())`, [randomUUID(), userId, cost, transactionId, reason]);
-    const updated = await client.query('SELECT credits FROM sala_accounts WHERE user_id = $1', [userId]);
-    return { refunded: true, credits: Number(updated.rows[0].credits) };
+    const updated = await client.query('SELECT credits FROM sala_accounts WHERE user_id = $1', [userId]); return { refunded: true, credits: Number(updated.rows[0].credits) };
   });
 }
 
 export async function recoverStaleGenerationReservations(userId) {
   if (!userId || !databaseConfigured()) return 0;
   const result = await dbQuery(`SELECT id FROM sala_transactions WHERE user_id = $1 AND type = 'generation' AND status = 'reserved' AND created_at <= NOW() - INTERVAL '20 minutes'`, [userId]);
-  let recovered = 0;
-  for (const row of result.rows) { const refund = await refundGeneration(userId, row.id, 'stale_generation_timeout'); if (refund.refunded) recovered += 1; }
-  return recovered;
+  let recovered = 0; for (const row of result.rows) { const refund = await refundGeneration(userId, row.id, 'stale_generation_timeout'); if (refund.refunded) recovered += 1; } return recovered;
 }
