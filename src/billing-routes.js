@@ -2,7 +2,7 @@ import express from 'express';
 import { BILLING_CONFIG, billingIsConfigured } from './billing-config.js';
 import { creditAccount } from './billing-ledger.js';
 import { dbQuery } from './database.js';
-import { createPayPalSubscription, getPayPalSubscription, paypalConfigured, paypalPlanId, paypalStatus, setupPayPalPlans, verifyPayPalWebhook } from './paypal-billing.js';
+import { createPayPalSubscription, getPayPalSubscription, paypalConfigured, paypalPlanId, paypalStatus, setupPayPalPlans, setupPayPalWebhook, verifyPayPalWebhook } from './paypal-billing.js';
 
 const router = express.Router();
 
@@ -44,15 +44,17 @@ router.get('/paypal/setup', async (req, res) => {
     return res.status(401).json({ error: 'Inicia sesión en Sala de Proyección antes de ejecutar la configuración de PayPal.' });
   }
   try {
-    const result = await setupPayPalPlans();
+    const plans = await setupPayPalPlans();
+    const webhook = await setupPayPalWebhook();
     return res.json({
       ok: true,
-      message: 'Planes de PayPal creados o encontrados. Copia estos tres IDs a las variables de Render.',
-      ...result
+      message: 'Planes y webhook de PayPal creados o encontrados. Guarda estos IDs en Render.',
+      ...plans,
+      ...webhook
     });
   } catch (error) {
     console.error('PayPal setup error:', error);
-    return res.status(502).json({ error: error.message || 'No se pudieron crear los planes de PayPal.' });
+    return res.status(502).json({ error: error.message || 'No se pudieron configurar los planes/webhook de PayPal.' });
   }
 });
 
