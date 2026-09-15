@@ -103,13 +103,12 @@ async function hasRealMotion(source) {
 async function normalize(source, target, fps, seconds) {
   if (!ffmpegPath) throw new Error('FFmpeg no está disponible para normalizar el vídeo.');
   const duration = Math.max(1, Number(seconds) || 5);
-  // Pixazo/LTX puede devolver un clip ligeramente más corto que 5 s.
-  // Extendemos clonando el último fotograma y después recortamos a la duración exacta.
-  const pad = Math.max(0, duration - 4.8).toFixed(3);
+  // Pixazo/LTX puede devolver clips algo más cortos que 5 s. Clonamos hasta
+  // disponer de margen y luego recortamos exactamente a la duración solicitada.
   await execFileAsync(ffmpegPath, [
     '-y', '-i', source,
     '-map', '0:v:0',
-    '-vf', `fps=${fps},tpad=stop_mode=clone:stop_duration=${pad}`,
+    '-vf', `fps=${fps},tpad=stop_mode=clone:stop_duration=1`,
     '-t', String(duration),
     '-an', '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '20',
     '-pix_fmt', 'yuv420p', '-movflags', '+faststart', target
