@@ -7,7 +7,8 @@
   "main": "src/wan-mode-entry.js",
   "scripts": {
     "start": "node src/wan-mode-entry.js",
-    "dev": "node --watch src/wan-mode-entry.js"
+    "dev": "node --watch src/wan-mode-entry.js",
+    "paypal:setup": "node scripts/paypal-setup.mjs"
   },
   "engines": {
     "node": ">=18"
