@@ -88,6 +88,9 @@
   }
 
   form.addEventListener('submit', async (event) => {
+    // 5-second videos use app.js -> /api/video/generate so the normal
+    // generation flow and audio-request-fix.js can handle narration.
+    if (Number(durationInput.value) <= 5) return;
     if (imageInput.files?.length || !audioTextInput.value.trim()) return;
     event.preventDefault(); event.stopImmediatePropagation();
     clearTimeout(timer); errorBox.classList.add('hidden'); generateBtn.disabled = true; cancelBtn.disabled = false;
