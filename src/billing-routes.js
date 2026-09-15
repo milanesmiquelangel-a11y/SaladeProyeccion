@@ -2,7 +2,7 @@ import express from 'express';
 import { BILLING_CONFIG, billingIsConfigured } from './billing-config.js';
 import { creditAccount } from './billing-ledger.js';
 import { dbQuery } from './database.js';
-import { createPayPalSubscription, getPayPalSubscription, paypalConfigured, paypalPlanId, paypalStatus, setupPayPalPlans, setupPayPalWebhook, verifyPayPalWebhook } from './paypal-billing.js';
+import { createPayPalSubscription, getPayPalSubscription, paypalConfigured, paypalPlanId, paypalPlanKind, paypalStatus, setupPayPalPlans, setupPayPalWebhook, verifyPayPalWebhook } from './paypal-billing.js';
 
 const router = express.Router();
 
@@ -13,12 +13,6 @@ function disabled(res, message = 'Pagos no configurados todavía.') {
 function configured(_req, res, next) {
   if (!billingIsConfigured()) return disabled(res, 'PayPal todavía no está configurado. Faltan las credenciales y/o los IDs de los planes.');
   next();
-}
-
-function planFromPayPalId(planId) {
-  if (planId && planId === process.env.PAYPAL_CREATOR_PLAN_ID) return 'creator';
-  if (planId && planId === process.env.PAYPAL_PRO_PLAN_ID) return 'pro';
-  return null;
 }
 
 router.get('/status', (_req, res) => {
@@ -74,7 +68,7 @@ router.post('/checkout', configured, async (req, res) => {
     return res.json({ checkoutUrl: approvalUrl, subscriptionId: subscription.id, plan: planId, provider: 'paypal' });
   } catch (error) {
     console.error('PayPal checkout error:', error);
-    return res.status(502).json({ error: error.message || 'No se pudo iniciar el pago con PayPal.' });
+    return res.status(502).json({ error: error.message || 'No se pudo iniciar la suscripción con PayPal.' });
   }
 });
 
@@ -87,7 +81,8 @@ async function subscriptionContext(subscriptionId) {
   const subscription = await getPayPalSubscription(subscriptionId);
   const planId = String(subscription?.plan_id || '').trim();
   const accountId = String(subscription?.custom_id || '').trim();
-  return { subscription, planId, accountId, plan: planFromPayPalId(planId) };
+  const plan = await paypalPlanKind(planId);
+  return { subscription, planId, accountId, plan };
 }
 
 router.post('/webhook', async (req, res) => {
