@@ -4,10 +4,16 @@ const PAYPAL_BASE_URL = process.env.PAYPAL_MODE === 'live'
 
 let tokenCache = { accessToken: null, expiresAt: 0 };
 
-export function paypalConfigured() {
+export function paypalCredentialsConfigured() {
   return Boolean(
     process.env.PAYPAL_CLIENT_ID &&
-    process.env.PAYPAL_CLIENT_SECRET &&
+    process.env.PAYPAL_CLIENT_SECRET
+  );
+}
+
+export function paypalConfigured() {
+  return Boolean(
+    paypalCredentialsConfigured() &&
     process.env.PAYPAL_CREATOR_PLAN_ID &&
     process.env.PAYPAL_PRO_PLAN_ID
   );
@@ -72,6 +78,85 @@ export function paypalPlanId(planId) {
   if (planId === 'creator') return process.env.PAYPAL_CREATOR_PLAN_ID || null;
   if (planId === 'pro') return process.env.PAYPAL_PRO_PLAN_ID || null;
   return null;
+}
+
+export async function setupPayPalPlans() {
+  if (!paypalCredentialsConfigured()) {
+    throw new Error('Faltan PAYPAL_CLIENT_ID y/o PAYPAL_CLIENT_SECRET.');
+  }
+
+  const productResponse = await paypalRequest('/v1/catalogs/products?page_size=20&page=1&total_required=true', {
+    method: 'GET'
+  });
+  const existingProducts = Array.isArray(productResponse?.products) ? productResponse.products : [];
+  let product = existingProducts.find((item) => item.name === 'Sala de Proyección');
+
+  if (!product) {
+    product = await paypalRequest('/v1/catalogs/products', {
+      method: 'POST',
+      headers: { 'PayPal-Request-Id': 'sala-de-proyeccion-product-v1' },
+      body: JSON.stringify({
+        name: 'Sala de Proyección',
+        description: 'Suscripciones mensuales para Sala de Proyección',
+        type: 'SERVICE',
+        category: 'SOFTWARE',
+        home_url: process.env.PUBLIC_APP_URL || 'https://sala-de-proyeccion.onrender.com'
+      })
+    });
+  }
+
+  const productId = product?.id;
+  if (!productId) throw new Error('PayPal no devolvió el ID del producto.');
+
+  const planResponse = await paypalRequest(`/v1/billing/plans?page_size=20&page=1&total_required=true&product_id=${encodeURIComponent(productId)}`, {
+    method: 'GET'
+  });
+  const existingPlans = Array.isArray(planResponse?.plans) ? planResponse.plans : [];
+
+  async function ensurePlan(planId, name, description, price) {
+    if (planId) return planId;
+    const existing = existingPlans.find((item) => item.name === name && item.product_id === productId);
+    if (existing?.id) return existing.id;
+
+    const created = await paypalRequest('/v1/billing/plans', {
+      method: 'POST',
+      headers: { 'PayPal-Request-Id': `sala-de-proyeccion-${planId || name.toLowerCase().replace(/[^a-z0-9]+/g, '-')}-v1` },
+      body: JSON.stringify({
+        product_id: productId,
+        name,
+        description,
+        billing_cycles: [{
+          frequency: { interval_unit: 'MONTH', interval_count: 1 },
+          tenure_type: 'REGULAR',
+          sequence: 1,
+          total_cycles: 0,
+          pricing_scheme: {
+            fixed_price: { value: price, currency_code: process.env.BILLING_CURRENCY || 'EUR' }
+          }
+        }],
+        payment_preferences: {
+          auto_bill_outstanding: true,
+          payment_failure_threshold: 1
+        }
+      })
+    });
+    return created?.id || null;
+  }
+
+  const creatorPlanId = await ensurePlan(
+    process.env.PAYPAL_CREATOR_PLAN_ID,
+    'Sala de Proyección Creador',
+    'Plan mensual Creador con 30 créditos',
+    '4.99'
+  );
+  const proPlanId = await ensurePlan(
+    process.env.PAYPAL_PRO_PLAN_ID,
+    'Sala de Proyección Pro',
+    'Plan mensual Pro con 100 créditos',
+    '14.99'
+  );
+
+  return { productId, creatorPlanId, proPlanId };
 }
 
 export async function createPayPalSubscription({ planId, accountId, email }) {
