@@ -85,9 +85,50 @@ export function paypalPlanId(planId) {
 
 async function activatePayPalPlan(planId) {
   return paypalRequest(`/v1/billing/plans/${encodeURIComponent(planId)}/activate`, {
-    method: 'POST',
-    body: JSON.stringify({})
+    method: 'POST'
   });
+}
+
+async function resolvePayPalPlan(planId) {
+  const configuredId = paypalPlanId(planId);
+  const expectedName = planId === 'creator'
+    ? 'Sala de Proyección Creador'
+    : 'Sala de Proyección Pro';
+
+  // First try the ID configured in Render. If it is malformed, stale, or
+  // belongs to another sandbox app, fall back to the actual plan in PayPal.
+  if (configuredId && /^P-[A-Z0-9]+$/.test(configuredId)) {
+    try {
+      const existing = await paypalRequest(`/v1/billing/plans/${encodeURIComponent(configuredId)}`, { method: 'GET' });
+      const status = String(existing?.status || '').toUpperCase();
+      if (status !== 'ACTIVE') await activatePayPalPlan(configuredId).catch(() => {});
+      return configuredId;
+    } catch (_error) {
+      // Continue with discovery below.
+    }
+  }
+
+  const productResponse = await paypalRequest('/v1/catalogs/products?page_size=20&page=1&total_required=true', { method: 'GET' });
+  const product = Array.isArray(productResponse?.products)
+    ? productResponse.products.find((item) => item.name === 'Sala de Proyección')
+    : null;
+  if (!product?.id) throw new Error(`No se encontró el producto de PayPal para el plan ${planId}.`);
+
+  const planResponse = await paypalRequest(`/v1/billing/plans?page_size=20&page=1&total_required=true&product_id=${encodeURIComponent(product.id)}`, { method: 'GET' });
+  const found = Array.isArray(planResponse?.plans)
+    ? planResponse.plans.find((item) => item.name === expectedName && item.product_id === product.id)
+    : null;
+  if (!found?.id) throw new Error(`No se encontró en PayPal el plan ${expectedName}.`);
+
+  const status = String(found.status || '').toUpperCase();
+  if (status !== 'ACTIVE') {
+    try {
+      await activatePayPalPlan(found.id);
+    } catch (error) {
+      if (!/already active|active plan|invalid plan status/i.test(String(error.message || ''))) throw error;
+    }
+  }
+  return found.id;
 }
 
 export async function setupPayPalPlans() {
@@ -224,7 +265,7 @@ export async function setupPayPalWebhook() {
 }
 
 export async function createPayPalSubscription({ planId, accountId, email }) {
-  const paypalPlan = paypalPlanId(planId);
+  const paypalPlan = await resolvePayPalPlan(planId);
   if (!paypalPlan) throw new Error('Plan de PayPal no configurado.');
   const baseUrl = process.env.PUBLIC_APP_URL || 'https://sala-de-proyeccion.onrender.com';
   const body = {
