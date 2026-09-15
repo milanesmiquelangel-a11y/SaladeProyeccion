@@ -3,11 +3,24 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 
-const SPACE = process.env.WAN_SPACE_ID || 'fffiloni/Wan2.1';
+// The previous public fffiloni/Wan2.1 Space is not a public inference backend:
+// its own UI says it must be duplicated and given a GPU. Calling it from our
+// server therefore produced the exact "Error executing command" seen by users.
+// Use a public ZeroGPU T2V 1.3B Space instead. It keeps WAN 2.1 and does not
+// require us to run the model on Render.
+const SPACE = process.env.WAN_SPACE_ID || '0AstroKnight0/wan2.1-t2v-1.3b-demo';
 const CONFIGURED_ENDPOINT = String(process.env.WAN_ENDPOINT || '').trim();
 const HF_TOKEN = process.env.HF_TOKEN || undefined;
 const generatedDir = path.join(process.cwd(), 'public', 'generated');
 let clientPromise;
+
+function spaceOrigin(space) {
+  const [owner, name] = String(space).split('/');
+  if (!owner || !name) return '';
+  return `https://${owner.toLowerCase()}-${name.toLowerCase().replace(/_/g, '-')}.hf.space`;
+}
+
+const SPACE_ORIGIN = spaceOrigin(SPACE);
 
 async function getClient() {
   if (!clientPromise) {
@@ -18,6 +31,15 @@ async function getClient() {
     });
   }
   return clientPromise;
+}
+
+function asRemoteUrl(value) {
+  if (typeof value !== 'string' || !value) return '';
+  if (/^https?:\/\//i.test(value)) return value;
+  if (value.startsWith('/file=') || value.startsWith('/gradio_api/file=')) {
+    return `${SPACE_ORIGIN}${value}`;
+  }
+  return '';
 }
 
 function outputReference(data) {
@@ -32,7 +54,8 @@ function outputReference(data) {
   }
 
   if (typeof data === 'string') {
-    if (/^https?:\/\//i.test(data)) return data;
+    const remote = asRemoteUrl(data);
+    if (remote) return remote;
     if (data.toLowerCase().endsWith('.mp4')) return data;
     return '';
   }
@@ -54,20 +77,91 @@ function outputReference(data) {
   return '';
 }
 
-function chooseEndpoint(api) {
-  const named = api?.named_endpoints || {};
-  const available = Object.keys(named);
-  if (available.includes('/infer')) return '/infer';
-  if (CONFIGURED_ENDPOINT && available.includes(CONFIGURED_ENDPOINT)) return CONFIGURED_ENDPOINT;
-  if (available.includes('/t2v_generation')) return '/t2v_generation';
-  if (available.length === 1) return available[0];
-  throw new Error(`El Space ${SPACE} no expone un endpoint WAN compatible. Endpoints disponibles: ${available.join(', ') || 'ninguno'}.`);
+function parameterName(parameter) {
+  return String(parameter?.parameter_name || parameter?.label || '').toLowerCase().replace(/[^a-z0-9]+/g, '_');
 }
 
-function buildInputs(endpoint, prompt, negative, aspect) {
-  if (endpoint === '/infer') return [prompt];
-  const resolution = aspect === '9:16' ? '480*832' : aspect === '1:1' ? '624*624' : '832*480';
-  return [prompt, resolution, Number(process.env.WAN_STEPS || 20), Number(process.env.WAN_GUIDE_SCALE || 6), Number(process.env.WAN_SHIFT_SCALE || 8), -1, String(negative || '')];
+function hasDefault(parameter) {
+  return Boolean(parameter?.parameter_has_default);
+}
+
+function buildInputs(endpointInfo, prompt, negative, aspect) {
+  const parameters = Array.isArray(endpointInfo?.parameters) ? endpointInfo.parameters : [];
+  const portrait = aspect === '9:16';
+  const square = aspect === '1:1';
+  const height = portrait ? 832 : square ? 624 : 480;
+  const width = portrait ? 480 : square ? 624 : 832;
+  const defaultSteps = Number(process.env.WAN_STEPS || 4);
+  const defaultGuidance = Number(process.env.WAN_GUIDE_SCALE || 1);
+  const defaultFrames = Number(process.env.WAN_FRAMES || 81);
+  const values = [];
+
+  for (const parameter of parameters) {
+    const name = parameterName(parameter);
+    const label = String(parameter?.label || '').toLowerCase();
+    let value;
+
+    if (name.includes('prompt') && !name.includes('negative')) value = prompt;
+    else if (name.includes('negative')) value = String(negative || '');
+    else if (name === 'height' || name.includes('height')) value = height;
+    else if (name === 'width' || name.includes('width')) value = width;
+    else if (name.includes('num_frames') || name.includes('frames') || name.includes('frame_num')) value = defaultFrames;
+    else if (name.includes('duration')) value = 5;
+    else if (name.includes('guidance') || name.includes('cfg')) value = defaultGuidance;
+    else if (name.includes('steps') || name.includes('inference')) value = defaultSteps;
+    else if (name === 'fps' || name.includes('frame_rate')) value = 16;
+    else if (name.includes('seed')) value = -1;
+    else if (name.includes('image') || name.includes('input_video') || name.includes('video')) {
+      if (!hasDefault(parameter)) throw new Error(`El endpoint WAN seleccionado requiere un archivo (${parameter.label || name}) y no es compatible con texto a vídeo.`);
+      value = parameter.parameter_default;
+    } else if (hasDefault(parameter)) value = parameter.parameter_default;
+    else if (parameter?.type === 'boolean' || parameter?.component === 'Checkbox') value = false;
+    else if (parameter?.type === 'number' || parameter?.component === 'Number' || parameter?.component === 'Slider') value = 0;
+    else if (parameter?.type === 'string' || parameter?.component === 'Textbox') value = '';
+    else value = null;
+
+    // Avoid unused label lint noise while keeping compatibility with older
+    // Gradio API metadata that exposes label instead of parameter_name.
+    void label;
+    values.push(value);
+  }
+
+  return values;
+}
+
+function chooseEndpoint(api) {
+  const named = api?.named_endpoints || {};
+  const entries = Object.entries(named);
+  if (!entries.length) throw new Error(`El Space ${SPACE} no expone endpoints Gradio públicos.`);
+
+  if (CONFIGURED_ENDPOINT && named[CONFIGURED_ENDPOINT]) return [CONFIGURED_ENDPOINT, named[CONFIGURED_ENDPOINT]];
+
+  const ranked = entries
+    .filter(([, info]) => Array.isArray(info?.parameters))
+    .map(([name, info]) => {
+      const names = info.parameters.map(parameterName);
+      const hasPrompt = names.some(value => value === 'prompt' || value.includes('prompt'));
+      const hasImage = names.some(value => value.includes('image') || value.includes('input_video'));
+      const hasVideoReturn = (info.returns || []).some(item => {
+        const text = `${item?.label || ''} ${item?.component || ''}`.toLowerCase();
+        return text.includes('video') || text.includes('file');
+      });
+      let score = 0;
+      if (hasPrompt) score += 10;
+      if (hasVideoReturn) score += 5;
+      if (!hasImage) score += 5;
+      if (name === '/generate_video') score += 10;
+      if (name === '/predict') score += 1;
+      return { name, info, score, hasPrompt, hasImage };
+    })
+    .filter(item => item.hasPrompt && !item.hasImage)
+    .sort((a, b) => b.score - a.score);
+
+  if (!ranked.length) {
+    throw new Error(`El Space ${SPACE} no expone un endpoint WAN 2.1 de texto a vídeo compatible. Endpoints: ${Object.keys(named).join(', ') || 'ninguno'}.`);
+  }
+
+  return [ranked[0].name, ranked[0].info];
 }
 
 async function publishLocalVideo(reference) {
@@ -85,18 +179,13 @@ async function publishLocalVideo(reference) {
 export async function generateWanVideo({ prompt, negative, aspect = '16:9', job }) {
   const app = await getClient();
   const api = await app.view_api();
-  const endpoint = chooseEndpoint(api);
-  const inputs = buildInputs(endpoint, prompt, negative, aspect);
+  const [endpoint, endpointInfo] = chooseEndpoint(api);
+  const inputs = buildInputs(endpointInfo, prompt, negative, aspect);
 
   job.providerState = 'PROCESSING';
   job.providerEndpoint = endpoint;
-  job.detail = `WAN 2.1 conectado (${endpoint}). Generando el vídeo…`;
+  job.detail = `WAN 2.1 conectado (${SPACE}, ${endpoint}). Generando el vídeo…`;
 
-  // The public WAN Space returns a single Video/FileData result. Using
-  // predict() is deliberate here: it waits for the authoritative final
-  // response instead of depending on the async event stream to expose the
-  // final FileData object. Gradio documents predict() as the direct API for
-  // endpoints that return one final value.
   let result;
   try {
     result = await app.predict(endpoint, inputs);
