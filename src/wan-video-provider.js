@@ -21,20 +21,35 @@ async function getClient() {
 }
 
 function outputReference(data) {
-  const values = Array.isArray(data) ? data : [data];
-  for (const value of values) {
-    if (typeof value === 'string') {
-      if (/^https?:\/\//i.test(value)) return value;
-      if (value.toLowerCase().endsWith('.mp4')) return value;
+  if (data == null) return '';
+
+  if (Array.isArray(data)) {
+    for (const value of data) {
+      const found = outputReference(value);
+      if (found) return found;
     }
-    if (value && typeof value === 'object') {
-      for (const candidate of [value.url, value.path, value.video?.url, value.video?.path]) {
-        if (typeof candidate !== 'string') continue;
-        if (/^https?:\/\//i.test(candidate)) return candidate;
-        if (candidate.toLowerCase().endsWith('.mp4')) return candidate;
-      }
+    return '';
+  }
+
+  if (typeof data === 'string') {
+    if (/^https?:\/\//i.test(data)) return data;
+    if (data.toLowerCase().endsWith('.mp4')) return data;
+    return '';
+  }
+
+  if (typeof data === 'object') {
+    for (const candidate of [
+      data.url,
+      data.path,
+      data.video?.url,
+      data.video?.path,
+      data.data
+    ]) {
+      const found = outputReference(candidate);
+      if (found) return found;
     }
   }
+
   return '';
 }
 
@@ -78,26 +93,53 @@ export async function generateWanVideo({ prompt, negative, aspect = '16:9', job 
   job.gradioJob = submission;
 
   let finalData = null;
+  let lastStatus = null;
+
   for await (const message of submission) {
     if (message.type === 'status') {
+      lastStatus = message.status || message;
       const status = message.status || {};
-      job.providerState = String(status.stage || 'PROCESSING').toUpperCase();
+      const stage = String(status.stage || status.status || 'PROCESSING').toUpperCase();
+      job.providerState = stage;
+
+      if (stage === 'ERROR' || status.success === false) {
+        const reason = status.message || status.code || 'El Space de WAN informó un error.';
+        throw new Error(`WAN 2.1 informó un error: ${reason}`);
+      }
+
       if (status.position != null) job.detail = `WAN 2.1 está en cola (posición ${status.position})…`;
       else if (status.eta != null) job.detail = `WAN 2.1 está procesando (estimación ${Math.ceil(status.eta)} s)…`;
       else job.detail = 'WAN 2.1 está generando el vídeo…';
     }
+
     if (message.type === 'data') finalData = message.data;
+  }
+
+  // Some Gradio client versions complete the async iterator without exposing
+  // the final FileData in a data event. Ask the Job for its authoritative result.
+  if (!outputReference(finalData)) {
+    try {
+      const result = await submission.result();
+      finalData = result?.data ?? result;
+    } catch (error) {
+      const reason = error?.message || String(error);
+      throw new Error(`WAN 2.1 terminó sin entregar el archivo. ${reason}`);
+    }
   }
 
   job.gradioJob = null;
   const reference = outputReference(finalData);
   if (!reference) {
-    throw new Error(`WAN 2.1 terminó, pero no se pudo localizar el archivo de vídeo. Respuesta: ${JSON.stringify(finalData).slice(0, 1200)}`);
+    const statusText = lastStatus ? ` Estado final: ${JSON.stringify(lastStatus).slice(0, 800)}` : '';
+    throw new Error(`WAN 2.1 terminó, pero no se pudo localizar el archivo de vídeo. Respuesta: ${JSON.stringify(finalData).slice(0, 1200)}.${statusText}`);
   }
+
   if (/^https?:\/\//i.test(reference)) {
     job.providerState = 'COMPLETED';
+    job.detail = 'WAN 2.1 terminó; vídeo preparado para FFmpeg…';
     return reference;
   }
+
   const published = await publishLocalVideo(reference);
   job.providerState = 'COMPLETED';
   job.detail = 'WAN 2.1 terminó; vídeo preparado para FFmpeg…';
