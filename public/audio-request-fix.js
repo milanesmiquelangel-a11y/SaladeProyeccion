@@ -1,5 +1,6 @@
 // AUDIO-ONLY INTEGRATION.
-// Keeps the existing video-generation requests and polling behavior intact.
+// The video-generation pipeline is left untouched. This layer observes completed
+// video jobs and adds a natural sound-effects/ambience track derived from the prompt.
 (() => {
   const nativeFetch = window.fetch.bind(window);
   const targets = ['/api/video/sequence', '/api/video/generate'];
@@ -9,14 +10,13 @@
   const readJson = async (response) => response.clone().json().catch(() => ({}));
   const keyFromResponse = (data) => data?.request_id || data?.requestId || data?.job_id || data?.jobId || '';
 
-  function rememberAudio(key) {
+  function rememberAudio(key, body) {
     if (!key) return;
-    const text = String(document.querySelector('#audioText')?.value || '').trim();
-    if (!text) return;
+    const prompt = String(body?.prompt || document.querySelector('#prompt')?.value || '').trim();
+    if (!prompt) return;
     pendingAudio.set(String(key), {
-      text: text.slice(0, 4000),
-      language: String(document.querySelector('#audioLanguage')?.value || 'en').trim() || 'en',
-      duration: Math.max(1, Number(document.querySelector('#duration')?.value) || 5)
+      prompt: prompt.slice(0, 4000),
+      duration: Math.min(60, Math.max(1, Number(body?.duration || document.querySelector('#duration')?.value) || 5))
     });
   }
 
@@ -26,23 +26,23 @@
     const detail = document.querySelector('#loadingDetail');
     const status = document.querySelector('#statusText');
     if (loading) loading.classList.remove('hidden');
-    if (title) title.textContent = 'Añadiendo audio natural…';
-    if (detail) detail.textContent = 'Generando la narración y sincronizándola con el vídeo…';
-    if (status) status.textContent = 'Procesando audio';
+    if (title) title.textContent = 'Añadiendo sonido natural…';
+    if (detail) detail.textContent = 'Creando ambiente y efectos de sonido según la escena…';
+    if (status) status.textContent = 'Procesando sonido';
   }
 
   async function addNaturalAudio(key, videoUrl, audio) {
-    if (!videoUrl || !audio?.text || processedAudio.has(String(key))) return;
+    if (!videoUrl || !audio?.prompt || processedAudio.has(String(key))) return;
     processedAudio.add(String(key));
     try {
       showAudioStatus();
-      const audioResponse = await nativeFetch('/api/audio/generate', {
+      const audioResponse = await nativeFetch('/api/audio/natural', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text: audio.text, language: audio.language })
+        body: JSON.stringify({ prompt: audio.prompt, durationSeconds: audio.duration })
       });
       const audioData = await audioResponse.json().catch(() => ({}));
-      if (!audioResponse.ok || !audioData.url) throw new Error(audioData.error || 'No se pudo generar la narración.');
+      if (!audioResponse.ok || !audioData.url) throw new Error(audioData.error || 'No se pudo generar el sonido natural.');
 
       let muxResponse;
       if (/^https:\/\//i.test(videoUrl)) {
@@ -59,7 +59,7 @@
         });
       }
       const muxData = await muxResponse.json().catch(() => ({}));
-      if (!muxResponse.ok || !muxData.url) throw new Error(muxData.error || 'No se pudo integrar el audio en el vídeo.');
+      if (!muxResponse.ok || !muxData.url) throw new Error(muxData.error || 'No se pudo integrar el sonido natural en el vídeo.');
 
       const finalUrl = `${muxData.url}?audio=${Date.now()}`;
       const player = document.querySelector('#videoPlayer');
@@ -69,9 +69,8 @@
       const loading = document.querySelector('#loadingState');
       const status = document.querySelector('#statusText');
       if (loading) loading.classList.add('hidden');
-      if (status) status.textContent = 'Completado con audio';
+      if (status) status.textContent = 'Completado · sonido natural';
 
-      // Replace the URL only in the local project/history records; no video-generation state is changed.
       try {
         const projects = JSON.parse(localStorage.getItem('salaProjects') || '[]');
         const history = JSON.parse(localStorage.getItem('salaHistory') || '[]');
@@ -81,13 +80,13 @@
         localStorage.setItem('salaHistory', JSON.stringify(history));
       } catch {}
     } catch (error) {
-      // Audio is an additive layer: never turn a successfully generated video into an error.
+      // Audio is additive: a sound-generation failure never invalidates a completed video.
       processedAudio.delete(String(key));
       const loading = document.querySelector('#loadingState');
       const status = document.querySelector('#statusText');
       if (loading) loading.classList.add('hidden');
       if (status) status.textContent = 'Vídeo listo';
-      console.warn('[Audio] El vídeo está listo; no se pudo añadir la narración:', error);
+      console.warn('[Audio] El vídeo está listo; no se pudo añadir el sonido natural:', error);
     } finally {
       pendingAudio.delete(String(key));
     }
@@ -98,19 +97,15 @@
     const method = String(init.method || input?.method || 'GET').toUpperCase();
 
     if (method === 'POST' && targets.some((route) => url.includes(route))) {
-      if (!init.body || typeof init.body !== 'string') return nativeFetch(input, init);
-      try {
-        const body = JSON.parse(init.body);
-        const text = String(document.querySelector('#audioText')?.value || '').trim();
-        const language = String(document.querySelector('#audioLanguage')?.value || 'en').trim() || 'en';
-        if (text) { body.audioText = text.slice(0, 4000); body.audioLanguage = language; }
-        const response = await nativeFetch(input, { ...init, body: JSON.stringify(body) });
-        const data = await readJson(response);
-        if (response.ok) rememberAudio(keyFromResponse(data));
-        return response;
-      } catch {
-        return nativeFetch(input, init);
+      const response = await nativeFetch(input, init);
+      if (response.ok && init.body && typeof init.body === 'string') {
+        try {
+          const body = JSON.parse(init.body);
+          const data = await readJson(response);
+          rememberAudio(keyFromResponse(data), body);
+        } catch {}
       }
+      return response;
     }
 
     const isStatus = method === 'GET' && (url.includes('/api/video/status/') || url.includes('/api/video/sequence/'));
@@ -126,6 +121,7 @@
         const videoUrl = data.outputUrl || data.output?.media_url;
         void addNaturalAudio(key, videoUrl, pendingAudio.get(key));
       }
+      if (['FAILED', 'ERROR', 'CANCELLED'].includes(state)) pendingAudio.delete(key);
     }
     return response;
   };
