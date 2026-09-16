@@ -19,19 +19,25 @@ const generatedDir = path.join(process.cwd(), 'public', 'generated');
 const audioDir = path.join(process.cwd(), 'public', 'generated-audio');
 const TIMEOUT_MS = 20 * 60 * 1000;
 const ALLOWED_DURATIONS = new Set([5, 10, 15, 20, 25, 30, 60]);
-const NEGATIVE = 'unrelated subject, unrelated object, deformed subject, melted subject, duplicate subject, extra limbs, missing limbs, distorted face, distorted hands, merged bodies, floating objects, impossible physics, warped background, unreadable text, cartoon, CGI, frozen frame, static image';
+const NEGATIVE = 'unrelated subject, unrelated object, deformed subject, melted subject, duplicate subject, extra limbs, missing limbs, distorted face, distorted hands, merged bodies, floating objects, impossible physics, warped background, unreadable text, cartoon, CGI, frozen frame, static image, sudden scene change, subject identity change, wardrobe change, prop change, background change, camera teleport, time jump';
 
 function settings(body = {}) {
   const aspect = ['16:9', '9:16', '1:1'].includes(body.aspect) ? body.aspect : '16:9';
   return { aspect, resolution: body.resolution === 'high' ? 'high' : 'standard', fps: Number(body.frameRate) === 30 ? 30 : 24 };
 }
 
-function promptFor(base, index, total, continued) {
+function promptFor(base, index, total, continued, audioMode, audioText) {
   const clean = String(base || '').trim().slice(0, 3600);
   const continuity = continued
-    ? 'Continue directly from the supplied final frame. Preserve the exact same subject, identity, environment, lighting and camera style. Continue the action naturally; do not restart, jump in time or introduce unrelated subjects.'
-    : 'Follow the user request exactly. Keep the requested subject, action and environment as the dominant content. Do not substitute a different subject or add an unrelated scene.';
-  return `${clean}\n\n${continuity}\nThis is segment ${index + 1} of ${total} of one continuous video.`;
+    ? 'Continue directly from the supplied final frame. Preserve the exact same subject identity, anatomy, appearance, clothing, colors, props, environment, lighting, weather and camera style. Continue the same action naturally from the exact prior moment; do not restart, jump in time, change location or introduce unrelated subjects.'
+    : 'Follow the user request exactly. Keep the requested subject, action, environment and props as the dominant content. Preserve one consistent subject identity and anatomy throughout the shot. Show a clear beginning, middle and end of the requested action with continuous physical motion. Do not substitute a different subject, add unrelated objects, change location or cut to another scene.';
+  const dialogue = audioMode === 'dialogue' && String(audioText || '').trim()
+    ? `The on-camera character is speaking the supplied dialogue naturally during the shot. The speaker remains visible when speaking, with believable mouth and facial movement. There is no off-screen narrator and no voice-over. Dialogue text: "${String(audioText).trim().slice(0, 1200)}".`
+    : '';
+  const narration = audioMode !== 'dialogue' && String(audioText || '').trim()
+    ? 'The supplied audio is narration/voice-over and does not require a visible speaker.'
+    : '';
+  return `${clean}\n\n${continuity}\n${dialogue}\n${narration}\nMaintain temporal consistency: same subject count, same identity and same scene from first frame to last frame. Keep motion physically continuous and avoid morphing, object replacement or abrupt pose changes. This is segment ${index + 1} of ${total} of one continuous video.`;
 }
 
 async function download(url, file) {
@@ -77,6 +83,8 @@ async function run(job, body) {
   try {
     const count = Math.ceil(total / 5);
     let reference = '';
+    const audioMode = body.audioMode === 'dialogue' ? 'dialogue' : 'narration';
+    const audioText = String(body.audioText || '').trim();
     for (let index = 0; index < count; index += 1) {
       if (job.cancelled) throw Object.assign(new Error('Generación cancelada.'), { code: 'CANCELLED' });
       const seconds = index === count - 1 && total % 5 ? total % 5 : 5;
@@ -84,7 +92,7 @@ async function run(job, body) {
       job.totalScenes = count;
       job.detail = reference ? `Generando escena ${index + 1} de ${count} con continuidad…` : `Generando escena ${index + 1} de ${count} con WAN 2.2…`;
       const mediaUrl = await generateWanVideo({
-        prompt: promptFor(body.prompt, index, count, Boolean(reference)),
+        prompt: promptFor(body.prompt, index, count, Boolean(reference), audioMode, audioText),
         negative: [body.negative, NEGATIVE].filter(Boolean).join(', '),
         aspect: cfg.aspect,
         imagePath: reference,
@@ -111,12 +119,13 @@ async function run(job, body) {
     job.detail = 'Uniendo las escenas y preparando el vídeo final…';
     await concat(clips, silent);
 
-    const narration = String(body.audioText || '').trim().slice(0, 4000);
     const finalPath = path.join(generatedDir, `${job.id}.mp4`);
-    if (narration) {
+    if (audioText) {
       job.providerState = 'GENERATING_AUDIO';
-      job.detail = `Generando narración en ${normalizeAudioLanguage(body.audioLanguage || 'en')}…`;
-      audioPath = await generateSpeechAudio({ text: narration, language: body.audioLanguage || 'en', outputDir: audioDir });
+      job.detail = audioMode === 'dialogue'
+        ? `Generando diálogo del personaje en ${normalizeAudioLanguage(body.audioLanguage || 'en')}…`
+        : `Generando narración en ${normalizeAudioLanguage(body.audioLanguage || 'en')}…`;
+      audioPath = await generateSpeechAudio({ text: audioText, language: body.audioLanguage || 'en', outputDir: audioDir });
       await muxAudioIntoVideo({ videoPath: silent, audioPath, outputPath: finalPath, durationSeconds: total });
     } else {
       await fs.copyFile(silent, finalPath);
@@ -126,7 +135,9 @@ async function run(job, body) {
     job.status = 'COMPLETED';
     job.providerState = 'COMPLETED';
     job.outputUrl = `/generated/${job.id}.mp4`;
-    job.detail = narration ? `Vídeo de ${total} s con narración ${normalizeAudioLanguage(body.audioLanguage || 'en')}.` : `Vídeo de ${total} s generado con WAN 2.2.`;
+    job.detail = audioText
+      ? `Vídeo de ${total} s con ${audioMode === 'dialogue' ? 'diálogo de personaje' : 'narración'} en ${normalizeAudioLanguage(body.audioLanguage || 'en')}.`
+      : `Vídeo de ${total} s generado con WAN 2.2.`;
   } catch (error) {
     console.error('[FINAL GENERATION]', error?.stack || error);
     if (job.userId && job.transactionId) await refundGeneration(job.userId, job.transactionId, error?.code === 'CANCELLED' ? 'generation_cancelled' : 'generation_failed');
