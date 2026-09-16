@@ -4,29 +4,16 @@ import fs from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { randomUUID } from 'node:crypto';
 import { finalizeGeneration, refundGeneration } from './billing-ledger.js';
-import { generateFreeWanImageVideo } from './free-wan-image-video.js';
-import { generateFreeSadTalkerVideo } from './free-sadtalker.js';
-import { generateFreeAITalkingHead } from './free-freeai-talking-head.js';
-import { generateLivePortraitVideo } from './free-liveportrait.js';
+import { generateWanVideo } from './wan-video-provider.js';
 import { generateSpeechAudio, muxAudioIntoVideo, normalizeAudioLanguage } from './audio-tts.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const publicDir = path.join(__dirname, '..', 'public');
 const uploadsDir = path.join(publicDir, 'uploads');
+const generatedDir = path.join(publicDir, 'generated');
 const audioDir = path.join(publicDir, 'generated-audio');
-const PIXAZO_API_KEY = process.env.PIXAZO_API_KEY;
-const PIXAZO_IMAGE_VIDEO_URL = process.env.PIXAZO_IMAGE_VIDEO_URL || 'https://gateway.pixazo.ai/seedance-2-5/v1/first-last-frame-to-video';
-const PIXAZO_STATUS_URL = 'https://gateway.pixazo.ai/v2/requests/status';
-const IMAGE_TIMEOUT_MS = 20 * 60 * 1000;
 const imageJobs = new Map();
-const IMAGE_VIDEO_ENGINE = String(process.env.IMAGE_VIDEO_ENGINE || 'freeai').toLowerCase();
 const nativeListen = express.application.listen;
-
-function absolutePublicUrl(req, relativePath) {
-  const forwarded = String(req.get('x-forwarded-proto') || '').split(',')[0].trim();
-  const protocol = forwarded || req.protocol || 'https';
-  return new URL(relativePath, `${protocol}://${req.get('host')}`).toString();
-}
 
 function extensionFor(contentType) {
   if (contentType === 'image/png') return 'png';
@@ -45,103 +32,43 @@ async function uploadImage(req, res) {
   return res.status(201).json({ url: `/uploads/${filename}` });
 }
 
-async function removeTemporaryUpload(imageUrl) {
-  const relative = String(imageUrl || '');
-  if (!relative.startsWith('/uploads/')) return;
-  const filename = path.basename(relative.slice('/uploads/'.length));
-  if (!filename || filename === '.' || filename === '..') return;
-  await fs.rm(path.join(uploadsDir, filename), { force: true });
-}
-
-async function submitImageVideo(req, body) {
-  const imageUrl = absolutePublicUrl(req, body.imageUrl);
-  const motion = String(body.prompt || '').trim();
-  const requestedDuration = Math.round(Number(body.duration) || 5);
-  const duration = Math.max(4, Math.min(30, requestedDuration));
-  const ratio = ['16:9', '9:16', '1:1', '4:3', '3:4', '21:9'].includes(body.aspect) ? body.aspect : '16:9';
-  const resolution = body.resolution === 'high' ? '720p' : '480p';
-  const prompt = ['Create a real photorealistic AI video from the supplied photograph.', 'The photograph is the exact identity reference for the person.', 'Preserve the same person, face, facial structure, hair, clothing, body proportions and appearance throughout the entire video.', 'Do not replace, redesign or reinterpret the person.', motion || 'The person makes subtle natural movements: gentle breathing, a natural blink and a very small head movement while remaining in the same place.', 'Natural human motion, realistic skin and anatomy, stable identity, stable clothing, stable background, cinematic realistic camera movement.', 'No face swap, no identity drift, no morphing, no extra people, no duplicate body parts, no deformed hands, no distorted face, no cartoon or CGI appearance.'].join(' ');
-  const payload = { content: [{ type: 'image_url', image_url: { url: imageUrl } }, { type: 'image_url', image_url: { url: imageUrl } }], prompt: prompt.slice(0, 5000), duration, ratio, resolution, generate_audio: false, watermark: false };
-  const response = await fetch(PIXAZO_IMAGE_VIDEO_URL, { method: 'POST', headers: { 'Content-Type': 'application/json', 'Cache-Control': 'no-cache', 'Ocp-Apim-Subscription-Key': PIXAZO_API_KEY }, body: JSON.stringify(payload) });
-  const data = await response.json().catch(() => ({}));
-  if (!response.ok) {
-    const message = data?.message || data?.error || data?.detail;
-    throw new Error(message ? `Pixazo rechazó la fotografía: ${message}` : `Pixazo rechazó la fotografía (HTTP ${response.status}).`);
-  }
-  const requestId = data.request_id || data.requestId;
-  if (!requestId) throw new Error('Pixazo no devolvió un identificador de generación.');
-  return requestId;
-}
-
-async function runPixazoImageJob(job) {
-  const deadline = Date.now() + IMAGE_TIMEOUT_MS;
-  try {
-    while (Date.now() < deadline) {
-      if (job.status === 'CANCELLED') return;
-      const response = await fetch(`${PIXAZO_STATUS_URL}/${encodeURIComponent(job.requestId)}`, { headers: { 'Ocp-Apim-Subscription-Key': PIXAZO_API_KEY } });
-      const data = await response.json().catch(() => ({}));
-      if (!response.ok) throw new Error(data?.message || data?.error || `Pixazo no pudo consultar el estado (HTTP ${response.status}).`);
-      const state = String(data.status || data.state || '').toUpperCase();
-      job.providerState = state;
-      if (state === 'COMPLETED' || state === 'SUCCEEDED' || data.output?.media_url) {
-        const rawUrl = data.output?.media_url;
-        job.outputUrl = Array.isArray(rawUrl) ? rawUrl[0] : rawUrl;
-        if (!job.outputUrl) throw new Error('Pixazo terminó sin devolver un vídeo.');
-        if (job.userId && job.transactionId) await finalizeGeneration(job.userId, job.transactionId);
-        job.status = 'COMPLETED';
-        job.detail = 'Vídeo IA real completado.';
-        return;
-      }
-      if (['ERROR', 'FAILED', 'CANCELLED'].includes(state)) throw new Error(data.error || `La generación terminó con estado ${state}.`);
-      await new Promise((resolve) => setTimeout(resolve, 5000));
-    }
-    throw new Error('La generación superó el límite de 20 minutos.');
-  } catch (error) {
-    if (job.status === 'CANCELLED') return;
-    if (job.userId && job.transactionId) await refundGeneration(job.userId, job.transactionId, 'image_generation_failed');
-    job.status = 'ERROR';
-    job.detail = `${error.message || 'No se pudo generar el vídeo desde la fotografía.'} El crédito fue devuelto.`;
-  }
-}
-
-async function runTalkingImageJob(job) {
+async function runImageJob(job) {
   let audioPath = '';
+  const work = path.join(generatedDir, `.work-${job.id}`);
   try {
-    if (!job.audioText) {
-      job.providerState = 'LTX_2_3';
-      job.detail = 'Sin narración: generando movimiento visual con LTX 2.3…';
-      const result = await generateFreeWanImageVideo({ imagePath: job.imagePath, prompt: job.prompt });
-      if (job.status === 'CANCELLED') return;
-      job.outputUrl = result.outputUrl;
-      job.providerState = 'COMPLETED';
-      job.status = 'COMPLETED';
-      job.detail = result.detail;
-      if (job.userId && job.transactionId) await finalizeGeneration(job.userId, job.transactionId);
-      return;
+    await fs.mkdir(generatedDir, { recursive: true });
+    await fs.mkdir(work, { recursive: true });
+    job.providerState = 'WAN_2_2';
+    job.detail = 'Generando vídeo desde la fotografía con WAN 2.2…';
+    const mediaUrl = await generateWanVideo({ prompt: job.prompt, aspect: job.aspect, imagePath: job.imagePath, job });
+    const silentPath = path.join(work, 'silent.mp4');
+    const response = await fetch(mediaUrl);
+    if (!response.ok) throw new Error(`No se pudo descargar el vídeo WAN 2.2 (HTTP ${response.status}).`);
+    await fs.writeFile(silentPath, Buffer.from(await response.arrayBuffer()));
+    const finalPath = path.join(generatedDir, `${job.id}.mp4`);
+    if (job.audioText) {
+      job.providerState = 'GENERATING_AUDIO';
+      job.detail = `Generando narración ${normalizeAudioLanguage(job.audioLanguage)}…`;
+      audioPath = await generateSpeechAudio({ text: job.audioText, language: job.audioLanguage, outputDir: audioDir });
+      await muxAudioIntoVideo({ videoPath: silentPath, audioPath, outputPath: finalPath, durationSeconds: job.duration });
+    } else {
+      await fs.copyFile(silentPath, finalPath);
     }
-
-    job.providerState = 'GENERATING_AUDIO';
-    job.detail = `Preparando audio hablado ${normalizeAudioLanguage(job.audioLanguage)}…`;
-    audioPath = await generateSpeechAudio({ text: job.audioText, language: job.audioLanguage, outputDir: audioDir });
-
-    job.providerState = 'FREEAI_SADTALKER';
-    job.detail = 'Generando persona hablante con Free.ai/SadTalker (sin ZeroGPU de Hugging Face)…';
-    const result = await generateFreeAITalkingHead({ imagePath: job.imagePath, audioPath });
-    if (job.status === 'CANCELLED') return;
-    job.outputUrl = result.outputUrl;
-    job.providerState = 'COMPLETED';
-    job.status = 'COMPLETED';
-    job.detail = `Vídeo hablado de 5 s con boca sincronizada y audio ${normalizeAudioLanguage(job.audioLanguage)}.`;
     if (job.userId && job.transactionId) await finalizeGeneration(job.userId, job.transactionId);
+    job.outputUrl = `/generated/${job.id}.mp4`;
+    job.status = 'COMPLETED';
+    job.providerState = 'COMPLETED';
+    job.detail = job.audioText ? `Vídeo desde fotografía con narración ${normalizeAudioLanguage(job.audioLanguage)}.` : 'Vídeo desde fotografía completado con WAN 2.2.';
   } catch (error) {
-    if (job.status === 'CANCELLED') return;
+    console.error('[IMAGE VIDEO]', error?.stack || error);
     if (job.userId && job.transactionId) await refundGeneration(job.userId, job.transactionId, 'image_generation_failed');
     job.status = 'ERROR';
     job.providerState = 'ERROR';
-    job.detail = `${error.message || 'No se pudo completar el vídeo hablado.'} El crédito fue devuelto.`;
+    job.detail = `${error.message || 'No se pudo generar el vídeo desde la fotografía.'} El crédito fue devuelto.`;
   } finally {
     if (audioPath) await fs.rm(audioPath, { force: true }).catch(() => {});
-    if (job.imagePath) await fs.rm(job.imagePath, { force: true }).catch(() => {});
+    await fs.rm(work, { recursive: true, force: true }).catch(() => {});
+    await fs.rm(job.imagePath, { force: true }).catch(() => {});
   }
 }
 
@@ -150,31 +77,24 @@ function mountImageRoutes(app) {
   app.post('/api/media/image', express.raw({ type: ['image/jpeg', 'image/png', 'image/webp'], limit: '20mb' }), uploadImage);
   app.post('/api/video/image-to-video', async (req, res) => {
     const body = req.body || {};
-    if (typeof body.prompt !== 'string' || !body.prompt.trim()) return res.status(400).json({ error: 'prompt es obligatorio.' });
     if (!body.imageUrl || !String(body.imageUrl).startsWith('/uploads/')) return res.status(400).json({ error: 'Selecciona una fotografía antes de generar.' });
-    const imagePath = path.join(publicDir, String(body.imageUrl).slice('/'.length));
+    const relative = String(body.imageUrl).slice('/'.length);
+    const imagePath = path.join(publicDir, relative);
     try {
       await fs.access(imagePath);
-      const jobId = randomUUID();
-      const imageUrl = absolutePublicUrl(req, body.imageUrl);
+      const id = randomUUID();
       const job = {
-        id: jobId, requestId: '', status: 'PROCESSING', providerState: 'QUEUED', createdAt: Date.now(), outputUrl: '',
-        detail: 'Preparando vídeo desde la fotografía…',
-        userId: req.salaBillingUserId, transactionId: req.salaBillingTransactionId, imagePath, imageUrl,
-        prompt: body.prompt, audioText: String(body.audioText || '').trim().slice(0, 4000), audioLanguage: normalizeAudioLanguage(body.audioLanguage)
+        id, status: 'QUEUED', providerState: 'QUEUED', detail: 'Preparando fotografía…', outputUrl: '',
+        createdAt: Date.now(), imagePath, prompt: String(body.prompt || 'Realistic natural movement of the subject, stable identity and environment.').slice(0, 4000),
+        aspect: ['16:9', '9:16', '1:1'].includes(body.aspect) ? body.aspect : '16:9', duration: Math.min(30, Math.max(5, Number(body.duration) || 5)),
+        audioText: String(body.audioText || '').trim().slice(0, 4000), audioLanguage: normalizeAudioLanguage(body.audioLanguage || 'en'),
+        userId: req.salaBillingUserId, transactionId: req.salaBillingTransactionId
       };
-      imageJobs.set(jobId, job);
-      if (IMAGE_VIDEO_ENGINE === 'freeai' || IMAGE_VIDEO_ENGINE === 'sadtalker' || IMAGE_VIDEO_ENGINE === 'talking-head' || IMAGE_VIDEO_ENGINE === 'ltx-2-3' || IMAGE_VIDEO_ENGINE === 'ltx' || IMAGE_VIDEO_ENGINE === 'auto' || IMAGE_VIDEO_ENGINE === 'wan-free') {
-        runTalkingImageJob(job).catch((error) => { job.status = 'ERROR'; job.providerState = 'ERROR'; job.detail = error.message || 'No se pudo completar la generación.'; });
-      } else {
-        const requestId = await submitImageVideo(req, body);
-        job.requestId = requestId;
-        await removeTemporaryUpload(body.imageUrl);
-        runPixazoImageJob(job).catch((error) => { job.status = 'ERROR'; job.detail = error.message || 'No se pudo completar la generación.'; });
-      }
-      return res.status(202).json({ job_id: jobId, request_id: job.requestId, provider: IMAGE_VIDEO_ENGINE });
+      imageJobs.set(id, job);
+      runImageJob(job).catch((error) => { job.status = 'ERROR'; job.detail = error.message || 'No se pudo completar la generación.'; });
+      return res.status(202).json({ job_id: id, provider: 'WAN 2.2 ZeroGPU', audio: Boolean(job.audioText) });
     } catch (error) {
-      await removeTemporaryUpload(body.imageUrl).catch(() => {});
+      await fs.rm(imagePath, { force: true }).catch(() => {});
       if (req.salaBillingUserId && req.salaBillingTransactionId) await refundGeneration(req.salaBillingUserId, req.salaBillingTransactionId, 'image_generation_submit_failed');
       return res.status(502).json({ error: error.message || 'No se pudo iniciar la generación desde la fotografía.' });
     }
@@ -182,15 +102,15 @@ function mountImageRoutes(app) {
   app.get('/api/video/image-to-video/:jobId', (req, res) => {
     const job = imageJobs.get(String(req.params.jobId || ''));
     if (!job) return res.status(404).json({ error: 'No se encontró la generación.' });
-    return res.json({ id: job.id, status: job.status, providerState: job.providerState, detail: job.detail || '', outputUrl: job.outputUrl || '' });
+    return res.json({ id: job.id, status: job.status, providerState: job.providerState, detail: job.detail, outputUrl: job.outputUrl });
   });
   app.post('/api/video/image-to-video/:jobId/cancel', async (req, res) => {
     const job = imageJobs.get(String(req.params.jobId || ''));
     if (!job) return res.status(404).json({ error: 'No se encontró la generación.' });
-    if (job.status === 'PROCESSING') {
+    if (!['COMPLETED', 'ERROR', 'CANCELLED'].includes(job.status)) {
       job.status = 'CANCELLED';
       if (job.userId && job.transactionId) await refundGeneration(job.userId, job.transactionId, 'image_generation_cancelled');
-      if (job.imagePath) await fs.rm(job.imagePath, { force: true }).catch(() => {});
+      await fs.rm(job.imagePath, { force: true }).catch(() => {});
     }
     return res.json({ ok: true, status: job.status, creditRefunded: true });
   });
@@ -198,7 +118,6 @@ function mountImageRoutes(app) {
 }
 
 express.application.listen = function imageVideoListen(...args) {
-  const app = this;
-  mountImageRoutes(app);
-  return nativeListen.apply(app, args);
+  mountImageRoutes(this);
+  return nativeListen.apply(this, args);
 };
