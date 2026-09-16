@@ -9,7 +9,7 @@ const activeSpace = configuredSpace && configuredSpace !== 'fffiloni/Wan2.1'
   ? configuredSpace
   : '0AstroKnight0/wan2.1-t2v-1.3b-demo';
 
-function directOrigin(space) {
+function makeDirectOrigin(space) {
   const [owner, name] = String(space).split('/');
   if (!owner || !name) return '';
   const normalizedOwner = owner.toLowerCase().replace(/[^a-z0-9-]/g, '-');
@@ -18,7 +18,7 @@ function directOrigin(space) {
 }
 
 if (activeSpace.includes('/')) {
-  const directOrigin = directOrigin(activeSpace);
+  const directOrigin = makeDirectOrigin(activeSpace);
   Client.connect = (source, options = {}) => {
     const requested = String(source || '');
     const target = requested === activeSpace ? directOrigin : source;
