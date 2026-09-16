@@ -16,6 +16,7 @@ const FALLBACK_SPACES = [
 const CONFIGURED_ENDPOINT = String(process.env.WAN_ENDPOINT || '').trim();
 const HF_TOKEN = process.env.HF_TOKEN || undefined;
 const clientPromises = new Map();
+const WAN_CLIP_TIMEOUT_MS = 4 * 60 * 1000;
 
 function spaceOrigin(space) {
   const [owner, name] = String(space).split('/');
@@ -170,10 +171,66 @@ function chooseEndpoint(api, space) {
   return [ranked[0].name, ranked[0].info];
 }
 
+async function submitWan(app, endpoint, inputs, job, space) {
+  const submission = app.submit(endpoint, inputs);
+  job.gradioJob = submission;
+  const deadline = Date.now() + WAN_CLIP_TIMEOUT_MS;
+
+  return await new Promise((resolve, reject) => {
+    let settled = false;
+    const finish = (fn, value) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      if (job.gradioJob === submission) job.gradioJob = null;
+      fn(value);
+    };
+    const timer = setTimeout(() => {
+      try { submission.cancel?.(); } catch (_) {}
+      finish(reject, Object.assign(new Error('WAN 2.2 tardó más de 4 minutos en producir el clip; generación detenida.'), { code: 'TIMEOUT' }));
+    }, WAN_CLIP_TIMEOUT_MS);
+
+    (async () => {
+      try {
+        for await (const message of submission) {
+          if (job.cancelled) {
+            try { submission.cancel?.(); } catch (_) {}
+            finish(reject, Object.assign(new Error('Generación cancelada.'), { code: 'CANCELLED' }));
+            return;
+          }
+          if (message?.type === 'status') {
+            const stage = String(message.stage || '').toLowerCase();
+            const eta = Number(message.eta);
+            if (stage === 'pending' || stage === 'generating' || stage === 'processing') {
+              job.providerState = stage.toUpperCase();
+              job.detail = eta > 0
+                ? `WAN 2.2 (${space}): generando clip; ETA aproximada ${Math.ceil(eta)} s…`
+                : `WAN 2.2 (${space}): generando el clip…`;
+            }
+          }
+          if (message?.type === 'data') {
+            finish(resolve, { data: message.data });
+            return;
+          }
+          if (message?.type === 'status' && message.success === false && String(message.stage || '').toLowerCase() === 'error') {
+            finish(reject, new Error(message.message || 'WAN 2.2 reportó un error durante la generación.'));
+            return;
+          }
+        }
+        if (!settled && Date.now() >= deadline) finish(reject, Object.assign(new Error('WAN 2.2 agotó el tiempo máximo para este clip.'), { code: 'TIMEOUT' }));
+        else if (!settled) finish(reject, new Error('WAN 2.2 cerró la cola sin devolver el vídeo.'));
+      } catch (error) {
+        finish(reject, error);
+      }
+    })();
+  });
+}
+
 export async function generateWanVideo({ prompt, negative, aspect = '16:9', job }) {
   let lastError = null;
   for (const space of FALLBACK_SPACES) {
     try {
+      if (job.cancelled) throw Object.assign(new Error('Generación cancelada.'), { code: 'CANCELLED' });
       job.detail = `Conectando con WAN 2.2 (${space})…`;
       const app = await getClient(space);
       const api = await app.view_api();
@@ -183,8 +240,7 @@ export async function generateWanVideo({ prompt, negative, aspect = '16:9', job 
       job.providerEndpoint = `${space}${endpoint}`;
       job.detail = `WAN 2.2 conectado (${space}, ${endpoint}). Generando el vídeo…`;
 
-      const result = await app.predict(endpoint, inputs);
-      job.gradioJob = null;
+      const result = await submitWan(app, endpoint, inputs, job, space);
       const reference = outputReference(result?.data ?? result, space);
       if (!reference) throw new Error(`La respuesta no contiene un vídeo: ${JSON.stringify(result).slice(0, 1200)}`);
       if (/^https?:\/\//i.test(reference)) {
@@ -196,6 +252,7 @@ export async function generateWanVideo({ prompt, negative, aspect = '16:9', job 
     } catch (error) {
       lastError = error;
       console.error(`[WAN 2.2] ${space} falló:`, error?.stack || error?.message || error);
+      if (error?.code === 'CANCELLED') throw error;
       job.detail = `WAN 2.2 (${space}) no disponible; probando respaldo…`;
     }
   }
@@ -203,6 +260,7 @@ export async function generateWanVideo({ prompt, negative, aspect = '16:9', job 
 }
 
 export function cancelWanVideo(job) {
+  job.cancelled = true;
   try { job.gradioJob?.cancel?.(); } catch (_) {}
   job.gradioJob = null;
 }
