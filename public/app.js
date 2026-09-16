@@ -159,10 +159,10 @@ function applyTemplate(name) {
 async function checkHealth() {
   try {
     const response = await fetch('/api/health'); const data = await response.json();
-    const ready = Boolean(data.generationReady || data.pixazoConfigured);
+    const ready = Boolean(data.generationReady);
     apiBadge.textContent = ready ? 'API lista' : 'API pendiente';
-    apiBadge.title = ready ? 'El proveedor está configurado.' : 'La interfaz está lista; falta la API key para generar.';
-    providerSetting.textContent = `${data.provider || 'Proveedor de vídeo'} · ${ready ? 'lista' : 'esperando API key'}`;
+    apiBadge.title = ready ? 'El proveedor está configurado.' : 'El servidor de generación no está listo.';
+    providerSetting.textContent = `${data.provider || 'Proveedor de vídeo'} · ${ready ? 'lista' : 'esperando'}`;
     providerDot.classList.toggle('ready', ready);
   } catch {
     apiBadge.textContent = 'Servidor desconectado'; providerSetting.textContent = 'Servidor no disponible'; providerDot.classList.remove('ready');
@@ -250,7 +250,7 @@ form.addEventListener('submit', async (event) => {
       return;
     }
 
-    setLoading('Enviando solicitud…', 'Contactando con LTX 2.5 Free.');
+    setLoading('Enviando solicitud…', 'Contactando con WAN 2.2 ZeroGPU.');
     const response = await fetch('/api/video/generate', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ prompt, negative: negativeInput.value.trim(), aspect: aspectInput.value, duration: totalDuration, resolution: resolutionInput.value, frameRate: Number(frameRateInput.value) })
@@ -269,21 +269,16 @@ form.addEventListener('submit', async (event) => {
 saveDraftBtn.addEventListener('click', () => {
   const project = saveProject({ status: 'borrador' });
   saveHistory({ name: project.name, prompt: project.prompt, aspect: project.aspect, duration: project.duration, date: Date.now(), status: 'borrador guardado' });
-  saveDraftBtn.textContent = '✓ Proyecto guardado'; setTimeout(() => { saveDraftBtn.textContent = 'Guardar proyecto'; }, 1600);
 });
-promptInput.addEventListener('input', () => { updateCounter(); if (autosaveSetting.checked) saveProject({ status: 'borrador' }); });
-negativeInput.addEventListener('input', () => { if (autosaveSetting.checked) saveProject({ status: 'borrador' }); });
-[aspectInput, durationInput, resolutionInput, frameRateInput, projectNameInput].forEach((input) => input.addEventListener('change', () => { if (autosaveSetting.checked) saveProject({ status: 'borrador' }); }));
+
 clearHistory.addEventListener('click', () => { localStorage.removeItem(STORAGE.history); renderHistory(); });
-document.querySelectorAll('.nav-btn').forEach((button) => button.addEventListener('click', () => showView(button.dataset.view)));
-document.querySelectorAll('[data-template]').forEach((button) => button.addEventListener('click', () => applyTemplate(button.dataset.template)));
 projectsGrid.addEventListener('click', (event) => { const button = event.target.closest('.open-project'); if (button) openProject(button.dataset.id); });
-$('#newProjectBtn').addEventListener('click', () => { form.reset(); durationInput.value = '5'; resolutionInput.value = 'standard'; frameRateInput.value = '24'; updateCounter(); clearResult(); showView('crear'); promptInput.focus(); });
-languageSetting.addEventListener('change', () => { const settings = readJson(STORAGE.settings, {}); settings.language = languageSetting.value; writeJson(STORAGE.settings, settings); });
-autosaveSetting.addEventListener('change', () => { const settings = readJson(STORAGE.settings, {}); settings.autosave = autosaveSetting.checked; writeJson(STORAGE.settings, settings); });
-resetLocalBtn.addEventListener('click', () => { if (!confirm('¿Borrar proyectos, historial y preferencias locales?')) return; Object.values(STORAGE).forEach((key) => localStorage.removeItem(key)); renderProjects(); renderHistory(); autosaveSetting.checked = true; languageSetting.value = 'es'; });
-function escapeHtml(value) { return String(value).replace(/[&<>'\"]/g, (char) => ({ '&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;' }[char])); }
+document.querySelectorAll('[data-template]').forEach((button) => button.addEventListener('click', () => applyTemplate(button.dataset.template)));
+document.querySelectorAll('.nav-btn').forEach((button) => button.addEventListener('click', () => showView(button.dataset.view)));
+promptInput.addEventListener('input', updateCounter);
+resetLocalBtn.addEventListener('click', () => { Object.values(STORAGE).forEach((key) => localStorage.removeItem(key)); location.reload(); });
+
+function escapeHtml(value) { return String(value).replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;').replaceAll('"', '&quot;').replaceAll("'", '&#039;'); }
 function escapeAttr(value) { return escapeHtml(value); }
-const settings = readJson(STORAGE.settings, { language: 'es', autosave: true });
-languageSetting.value = settings.language || 'es'; autosaveSetting.checked = settings.autosave !== false;
-updateCounter(); renderProjects(); renderHistory(); checkHealth();
+
+updateCounter(); renderHistory(); renderProjects(); showView('crear'); checkHealth();
