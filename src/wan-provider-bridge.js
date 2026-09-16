@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { generateWanVideo } from './wan-video-provider.js';
+import { generateWanVideo, cancelWanVideo } from './wan-video-provider.js';
 
 // Compatibility transport: the legacy generation pipeline still uses the
 // Pixazo/LTX HTTP contract. Intercept BOTH relative and absolute legacy URLs
@@ -19,28 +19,15 @@ function response(data, status = 200) {
   });
 }
 
-function isTextProviderUrl(url) {
-  return String(url).includes(WAN_TEXT_PATH);
-}
-
-function isImageProviderUrl(url) {
-  return String(url).includes(WAN_IMAGE_PATH);
-}
-
-function isStatusUrl(url) {
-  return String(url).includes(WAN_STATUS_PATH);
-}
+function isTextProviderUrl(url) { return String(url).includes(WAN_TEXT_PATH); }
+function isImageProviderUrl(url) { return String(url).includes(WAN_IMAGE_PATH); }
+function isStatusUrl(url) { return String(url).includes(WAN_STATUS_PATH); }
 
 function startWan(body) {
   const id = randomUUID();
   const record = {
-    id,
-    status: 'QUEUED',
-    output: '',
-    error: '',
-    createdAt: Date.now(),
-    providerState: 'QUEUED',
-    cancelled: false
+    id, status: 'QUEUED', output: '', error: '', createdAt: Date.now(),
+    providerState: 'QUEUED', cancelled: false, gradioJob: null
   };
   providerJobs.set(id, record);
 
@@ -57,19 +44,29 @@ function startWan(body) {
     record.output = url;
   }).catch(error => {
     if (record.cancelled) return;
-    record.status = 'FAILED';
-    record.providerState = 'FAILED';
+    record.status = error?.code === 'CANCELLED' ? 'CANCELLED' : 'FAILED';
+    record.providerState = record.status;
     record.error = error?.message || 'WAN 2.2 no pudo completar la generación.';
   });
 
   return id;
 }
 
+export function cancelWanProviderJob(id) {
+  const record = providerJobs.get(String(id || ''));
+  if (!record) return false;
+  record.cancelled = true;
+  record.status = 'CANCELLED';
+  record.providerState = 'CANCELLED';
+  record.error = 'Generación cancelada por el usuario.';
+  try { cancelWanVideo(record); } catch (_) {}
+  return true;
+}
+
 globalThis.fetch = async (input, init = {}) => {
   const url = typeof input === 'string' ? input : input?.url || '';
   const method = String(init.method || input?.method || 'GET').toUpperCase();
 
-  // Intercept absolute Pixazo URLs as well as the relative compatibility URLs.
   if ((isTextProviderUrl(url) || isImageProviderUrl(url)) && method === 'POST') {
     let body = {};
     try { body = JSON.parse(String(init.body || '{}')); } catch (_) {}
@@ -84,6 +81,7 @@ globalThis.fetch = async (input, init = {}) => {
     if (!record) return response({ status: 'ERROR', error: 'No se encontró la generación WAN 2.2.' }, 404);
     if (record.status === 'COMPLETED') return response({ status: 'COMPLETED', output: { media_url: record.output } });
     if (record.status === 'FAILED') return response({ status: 'FAILED', error: record.error });
+    if (record.status === 'CANCELLED') return response({ status: 'CANCELLED', error: record.error, creditRefunded: true });
     return response({ status: record.providerState || 'PROCESSING' });
   }
 
