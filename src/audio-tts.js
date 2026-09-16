@@ -10,7 +10,6 @@ const LANGUAGE_ALIASES = {
   it: 'it-IT', pt: 'pt-BR', ja: 'ja-JP', ko: 'ko-KR', 'zh-cn': 'zh-CN', zh: 'zh-CN', tr: 'tr-TR',
   ar: 'ar-SA', hi: 'hi-IN', pl: 'pl-PL', uk: 'uk-UA', nl: 'nl-NL'
 };
-
 const VOICES = {
   'en-US': 'en-US-EmmaMultilingualNeural', 'es-ES': 'es-ES-ElviraNeural', 'ru-RU': 'ru-RU-SvetlanaNeural',
   'kk-KZ': 'kk-KZ-AigulNeural', 'fr-FR': 'fr-FR-DeniseNeural', 'de-DE': 'de-DE-KatjaNeural',
@@ -43,16 +42,13 @@ async function edgeSpeech(text, voice, output) {
   if (!stat?.size) throw new Error('Edge TTS no devolvió un archivo de audio.');
 }
 
-async function googleFallback(text, language, outputDir) {
+async function googleFallback(text, language, output) {
   const parts = await getAllAudioBase64(text, {
-    lang: normalizeAudioLanguage(language).split('-')[0],
-    slow: false,
-    host: 'https://translate.google.com',
-    timeout: 15000,
-    splitPunct: ',.?!;:،。！？；：'
+    lang: normalizeAudioLanguage(language).split('-')[0], slow: false,
+    host: 'https://translate.google.com', timeout: 15000, splitPunct: ',.?!;:،。！？；：'
   });
   if (!Array.isArray(parts) || !parts.length) throw new Error('El respaldo Google TTS no devolvió audio.');
-  const work = path.join(outputDir, `google-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`);
+  const work = path.join(path.dirname(output), `google-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`);
   await fs.mkdir(work, { recursive: true });
   try {
     const files = [];
@@ -61,13 +57,12 @@ async function googleFallback(text, language, outputDir) {
       await fs.writeFile(file, Buffer.from(parts[i].base64, 'base64'));
       files.push(file);
     }
-    if (files.length === 1) await fs.copyFile(files[0], outputDir + '/voice-fallback.mp3');
+    if (files.length === 1) await fs.copyFile(files[0], output);
     else {
       const list = path.join(work, 'concat.txt');
       await fs.writeFile(list, files.map((file) => `file '${file.replaceAll("'", "'\\''")}'`).join('\n'));
-      await runFfmpeg(['-y', '-f', 'concat', '-safe', '0', '-i', list, '-c', 'copy', outputDir + '/voice-fallback.mp3']);
+      await runFfmpeg(['-y', '-f', 'concat', '-safe', '0', '-i', list, '-c', 'copy', output]);
     }
-    await fs.rename(outputDir + '/voice-fallback.mp3', path.join(outputDir, path.basename(output)));
   } finally { await fs.rm(work, { recursive: true, force: true }).catch(() => {}); }
 }
 
@@ -78,7 +73,7 @@ export async function generateSpeechAudio({ text, language = 'en', outputDir }) 
   const dir = outputDir || path.join(process.cwd(), 'public', 'generated-audio');
   await fs.mkdir(dir, { recursive: true });
   const locale = normalizeAudioLanguage(language);
-  const voice = VOICES[locale] || VOICES.en;
+  const voice = VOICES[locale] || VOICES['en-US'];
   const output = path.join(dir, `voice-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.mp3`);
   try {
     await edgeSpeech(cleanText, voice, output);
@@ -86,7 +81,7 @@ export async function generateSpeechAudio({ text, language = 'en', outputDir }) 
   } catch (edgeError) {
     console.warn(`[TTS] Edge TTS falló para ${locale}; usando respaldo:`, edgeError?.message || edgeError);
     try {
-      await googleFallback(cleanText, locale, dir);
+      await googleFallback(cleanText, locale, output);
       return output;
     } catch (fallbackError) {
       await fs.rm(output, { force: true }).catch(() => {});
@@ -97,11 +92,7 @@ export async function generateSpeechAudio({ text, language = 'en', outputDir }) 
 
 export async function muxAudioIntoVideo({ videoPath, audioPath, outputPath, durationSeconds = 5 }) {
   const duration = Math.max(1, Number(durationSeconds) || 5);
-  await runFfmpeg([
-    '-y', '-i', videoPath, '-stream_loop', '-1', '-i', audioPath,
-    '-map', '0:v:0', '-map', '1:a:0', '-t', String(duration),
-    '-c:v', 'copy', '-c:a', 'aac', '-b:a', '128k', '-movflags', '+faststart', outputPath
-  ]);
+  await runFfmpeg(['-y', '-i', videoPath, '-stream_loop', '-1', '-i', audioPath, '-map', '0:v:0', '-map', '1:a:0', '-t', String(duration), '-c:v', 'copy', '-c:a', 'aac', '-b:a', '128k', '-movflags', '+faststart', outputPath]);
   const { stdout } = await new Promise((resolve, reject) => {
     const child = spawn(ffmpegPath, ['-v', 'error', '-i', outputPath, '-select_streams', 'a:0', '-show_entries', 'stream=codec_type', '-of', 'csv=p=0'], { stdio: ['ignore', 'pipe', 'pipe'] });
     let out = '', err = '';
