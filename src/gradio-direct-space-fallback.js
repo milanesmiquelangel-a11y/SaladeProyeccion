@@ -1,13 +1,12 @@
 import { Client } from '@gradio/client';
 
-// Some Hugging Face Spaces fail through the Space-ID discovery/fetcher path
-// while their direct *.hf.space host is reachable. Force the WAN client to
-// use the direct Gradio origin for the active WAN Space.
+// Keep the direct Gradio workaround aligned with the WAN 2.2 provider.
+// The provider itself also handles multiple WAN 2.2 fallback Spaces.
 const originalConnect = Client.connect.bind(Client);
 const configuredSpace = String(process.env.WAN_SPACE_ID || '').trim();
-const activeSpace = configuredSpace && configuredSpace !== 'fffiloni/Wan2.1'
+const activeSpace = configuredSpace && !/wan2\.1/i.test(configuredSpace)
   ? configuredSpace
-  : '0AstroKnight0/wan2.1-t2v-1.3b-demo';
+  : 'Upsampler/wan-2-2-5b-video';
 
 function makeDirectOrigin(space) {
   const [owner, name] = String(space).split('/');
@@ -22,7 +21,7 @@ if (activeSpace.includes('/')) {
   Client.connect = (source, options = {}) => {
     const requested = String(source || '');
     const target = requested === activeSpace ? directOrigin : source;
-    console.log(`[WAN] Gradio directo: ${target}`);
+    console.log(`[WAN 2.2] Gradio directo: ${target}`);
     return originalConnect(target, options);
   };
 }
