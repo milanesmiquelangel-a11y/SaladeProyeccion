@@ -12,6 +12,8 @@ const frameRateInput = $('#frameRate');
 const generateBtn = $('#generateBtn');
 const cancelBtn = $('#cancelBtn');
 const audioPreviewBtn = $('#audioPreviewBtn');
+const copyPromptBtn = $('#copyPromptBtn');
+const copyPromptStatus = $('#copyPromptStatus');
 const charCount = $('#charCount');
 const apiBadge = $('#apiBadge');
 const statusText = $('#statusText');
@@ -46,6 +48,31 @@ function showError(message) { errorBox.textContent = message; errorBox.classList
 function clearError() { errorBox.textContent = ''; errorBox.classList.add('hidden'); }
 function setLoading(title, detail) { emptyState.classList.add('hidden'); loadingState.classList.remove('hidden'); loadingTitle.textContent = title; loadingDetail.textContent = detail; statusText.textContent = 'Procesando'; }
 function updateCounter() { charCount.textContent = `${promptInput.value.length} / 4000`; }
+
+async function copyPrompt() {
+  const text = promptInput?.value.trim() || '';
+  if (!text) {
+    copyPromptStatus.textContent = 'Write a prompt first.';
+    return;
+  }
+  try {
+    if (navigator.clipboard?.writeText) await navigator.clipboard.writeText(text);
+    else {
+      const helper = document.createElement('textarea');
+      helper.value = text; helper.setAttribute('readonly', '');
+      helper.style.position = 'fixed'; helper.style.opacity = '0';
+      document.body.appendChild(helper); helper.select();
+      const copied = document.execCommand('copy');
+      helper.remove();
+      if (!copied) throw new Error('copy-failed');
+    }
+    copyPromptStatus.textContent = 'Prompt copied.';
+    setTimeout(() => { copyPromptStatus.textContent = ''; }, 2200);
+  } catch (_) {
+    copyPromptStatus.textContent = 'Select the prompt and copy it manually.';
+    promptInput.focus(); promptInput.select();
+  }
+}
 
 function currentProject() {
   return {
@@ -217,6 +244,7 @@ form.addEventListener('submit', async (event) => {
 });
 
 cancelBtn?.addEventListener('click', cancelActive);
+copyPromptBtn?.addEventListener('click', copyPrompt);
 audioPreviewBtn?.addEventListener('click', async () => {
   clearError();
   const text = audioTextInput?.value.trim();
