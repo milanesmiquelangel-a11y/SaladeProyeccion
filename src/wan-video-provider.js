@@ -86,6 +86,42 @@ function preferredModelValue(parameter) {
   return match == null ? null : (typeof match === 'object' ? (match.value ?? match.label) : match);
 }
 
+function numericMetadata(parameter) {
+  const sources = [
+    parameter,
+    parameter?.parameter_type,
+    parameter?.type_info,
+    parameter?.parameter_type?.number
+  ].filter(Boolean);
+  const read = (names) => {
+    for (const source of sources) {
+      for (const name of names) {
+        const value = Number(source?.[name]);
+        if (Number.isFinite(value)) return value;
+      }
+    }
+    return null;
+  };
+  return {
+    minimum: read(['minimum', 'min', 'min_value']),
+    maximum: read(['maximum', 'max', 'max_value']),
+    step: read(['step'])
+  };
+}
+
+function clampNumericValue(value, parameter) {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return value;
+  const { minimum, maximum, step } = numericMetadata(parameter);
+  let result = value;
+  if (minimum != null) result = Math.max(minimum, result);
+  if (maximum != null) result = Math.min(maximum, result);
+  if (step != null && step > 0 && minimum != null) {
+    result = minimum + Math.round((result - minimum) / step) * step;
+    if (maximum != null) result = Math.min(maximum, result);
+  }
+  return Number.isInteger(result) ? Math.trunc(result) : Number(result.toFixed(6));
+}
+
 function dimensions(aspect) {
   if (aspect === '9:16') return { width: 480, height: 832 };
   if (aspect === '1:1') return { width: 624, height: 624 };
@@ -151,7 +187,7 @@ function buildInputs(endpointInfo, { prompt, negative, aspect, imagePath }) {
   const { width, height } = dimensions(aspect);
   const frames = Number(process.env.WAN_FRAMES || 49);
   const requestedSteps = Number(process.env.WAN_STEPS || 8);
-  const steps = Number.isFinite(requestedSteps) ? Math.min(8, Math.max(1, Math.trunc(requestedSteps))) : 8;
+  const steps = Number.isFinite(requestedSteps) ? Math.max(1, Math.trunc(requestedSteps)) : 8;
   const guidance = Number(process.env.WAN_GUIDE_SCALE || 5);
   const values = [];
 
@@ -169,7 +205,13 @@ function buildInputs(endpointInfo, { prompt, negative, aspect, imagePath }) {
     else if (lower.includes('sampling_steps') || lower.includes('steps') || lower.includes('inference')) value = steps;
     else if (lower.includes('guidance') || lower.includes('cfg') || lower.includes('guide_scale')) value = guidance;
     else if (lower.includes('frame_rate') || lower === 'fps') value = 24;
-    else if (lower.includes('seed')) value = -1;
+    else if (lower.includes('seed')) {
+      // Some current Gradio Spaces declare seed minimum=0 even though the
+      // original Wan demo used -1 as the UI sentinel for randomization.
+      // Clamp to the live API's declared range instead of sending -1 blindly.
+      const defaultSeed = Number(defaultValue(parameter));
+      value = Number.isFinite(defaultSeed) && defaultSeed >= 0 ? defaultSeed : 0;
+    }
     else if (lower === 'model' || lower.includes('model_choice') || lower.includes('model_id')) value = preferredModelValue(parameter) ?? value;
     else if (isFileParameter(parameter)) {
       if (imagePath) value = handle_file(imagePath);
@@ -180,6 +222,7 @@ function buildInputs(endpointInfo, { prompt, negative, aspect, imagePath }) {
     if (value == null && (parameter?.type === 'boolean' || parameter?.component === 'Checkbox')) value = false;
     if (value == null && (parameter?.type === 'number' || parameter?.component === 'Number' || parameter?.component === 'Slider')) value = 0;
     if (value == null && (parameter?.type === 'string' || parameter?.component === 'Textbox')) value = '';
+    if (typeof value === 'number') value = clampNumericValue(value, parameter);
     values.push(value);
   }
   return values;
