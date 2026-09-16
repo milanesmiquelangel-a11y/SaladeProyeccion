@@ -2,11 +2,20 @@ import path from 'node:path';
 import fs from 'node:fs/promises';
 import { generateSpeech } from './audio-service.js';
 import { attachGeneratedAudio } from './patch-audio-mux.js';
-import { generateAndAttachAudio } from './audio-natural-integration.js';
 
 const publicDir = path.join(process.cwd(), 'public');
 const audioDir = path.join(publicDir, 'generated-audio');
 const generatedDir = path.join(publicDir, 'generated');
+
+function assertSafeRemoteUrl(value) {
+  const parsed = new URL(String(value || '').trim());
+  if (parsed.protocol !== 'https:') throw new Error('El vídeo remoto debe utilizar HTTPS.');
+  const host = parsed.hostname.toLowerCase();
+  if (host === 'localhost' || host === '127.0.0.1' || host === '::1' || host === '0.0.0.0' || host.endsWith('.local') || /^10\./.test(host) || /^192\.168\./.test(host) || /^172\.(1[6-9]|2\d|3[0-1])\./.test(host) || host === '169.254.169.254') {
+    throw new Error('La dirección del vídeo remoto no está permitida.');
+  }
+  return parsed.toString();
+}
 
 export function mountAudioApi(app) {
   app.post('/api/audio/generate', async (req, res) => {
@@ -41,47 +50,38 @@ export function mountAudioApi(app) {
     }
   });
 
-  // Audio-only integration for provider videos that are returned as remote URLs.
-  // This does not alter, intercept or replace the video-generation route.
+  // Audio-only endpoint for a completed provider video returned as an HTTPS URL.
+  // The existing video-generation endpoint is not modified or intercepted.
   app.post('/api/audio/mux-remote', async (req, res) => {
+    let sourcePath = '';
     try {
-      const videoUrl = String(req.body?.videoUrl || '').trim();
+      const videoUrl = assertSafeRemoteUrl(req.body?.videoUrl);
       const audioName = path.basename(String(req.body?.audio || ''));
-      const durationSeconds = Number(req.body?.durationSeconds) || 5;
-      if (!videoUrl || !audioName) return res.status(400).json({ error: 'Faltan el vídeo remoto o el audio.' });
+      const durationSeconds = Math.max(1, Number(req.body?.durationSeconds) || 5);
+      if (!audioName) return res.status(400).json({ error: 'Falta el audio.' });
       const audioPath = path.join(audioDir, audioName);
       await fs.access(audioPath);
-      const result = await generateAndAttachAudio({
-        videoUrl,
-        text: '',
-        language: 'en',
-        durationSeconds
-      }).catch(async (error) => {
-        // The helper also generates speech; for an already-generated audio file,
-        // perform the same remote download/mux operation without regenerating TTS.
-        const parsed = new URL(videoUrl);
-        if (parsed.protocol !== 'https:') throw error;
-        const host = parsed.hostname.toLowerCase();
-        if (host === 'localhost' || host === '127.0.0.1' || host === '::1' || host.endsWith('.local') || /^10\./.test(host) || /^192\.168\./.test(host) || /^172\.(1[6-9]|2\d|3[0-1])\./.test(host) || host === '169.254.169.254') throw error;
-        await fs.mkdir(generatedDir, { recursive: true });
-        const sourceName = `remote-audio-source-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.mp4`;
-        const outputName = `natural-audio-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.mp4`;
-        const sourcePath = path.join(generatedDir, sourceName);
-        const outputPath = path.join(generatedDir, outputName);
-        try {
-          const remote = await fetch(parsed.toString(), { redirect: 'follow' });
-          if (!remote.ok) throw new Error(`No se pudo descargar el vídeo (HTTP ${remote.status}).`);
-          await fs.writeFile(sourcePath, Buffer.from(await remote.arrayBuffer()));
-          await attachGeneratedAudio({ videoPath: sourcePath, audioPath, outputPath, durationSeconds });
-          return { url: `/generated/${outputName}` };
-        } finally {
-          await fs.rm(sourcePath, { force: true }).catch(() => {});
-        }
-      });
-      return res.json({ ok: true, ...(result || {}) });
+      await fs.mkdir(generatedDir, { recursive: true });
+
+      const remote = await fetch(videoUrl, { redirect: 'follow' });
+      if (!remote.ok) throw new Error(`No se pudo descargar el vídeo para añadir el audio (HTTP ${remote.status}).`);
+      const maxBytes = 250 * 1024 * 1024;
+      const contentLength = Number(remote.headers.get('content-length') || 0);
+      if (contentLength > maxBytes) throw new Error('El vídeo es demasiado grande para el montaje de audio.');
+      const bytes = Buffer.from(await remote.arrayBuffer());
+      if (bytes.length > maxBytes) throw new Error('El vídeo es demasiado grande para el montaje de audio.');
+
+      sourcePath = path.join(generatedDir, `remote-audio-source-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.mp4`);
+      const outputName = `natural-audio-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.mp4`;
+      const outputPath = path.join(generatedDir, outputName);
+      await fs.writeFile(sourcePath, bytes);
+      await attachGeneratedAudio({ videoPath: sourcePath, audioPath, outputPath, durationSeconds });
+      return res.json({ ok: true, url: `/generated/${outputName}` });
     } catch (error) {
       console.error('Remote audio mux error:', error);
       return res.status(502).json({ error: error.message || 'No se pudo integrar el audio en el vídeo remoto.' });
+    } finally {
+      if (sourcePath) await fs.rm(sourcePath, { force: true }).catch(() => {});
     }
   });
 }
