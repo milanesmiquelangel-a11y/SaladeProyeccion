@@ -1,3 +1,4 @@
+import './wan-runtime-safety.js';
 import './final-generation-bootstrap.js';
 import './admin-bootstrap.js';
 await import('./monetized-entry.js');
