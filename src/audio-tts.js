@@ -93,11 +93,5 @@ export async function generateSpeechAudio({ text, language = 'en', outputDir }) 
 export async function muxAudioIntoVideo({ videoPath, audioPath, outputPath, durationSeconds = 5 }) {
   const duration = Math.max(1, Number(durationSeconds) || 5);
   await runFfmpeg(['-y', '-i', videoPath, '-stream_loop', '-1', '-i', audioPath, '-map', '0:v:0', '-map', '1:a:0', '-t', String(duration), '-c:v', 'copy', '-c:a', 'aac', '-b:a', '128k', '-movflags', '+faststart', outputPath]);
-  const { stdout } = await new Promise((resolve, reject) => {
-    const child = spawn(ffmpegPath, ['-v', 'error', '-i', outputPath, '-select_streams', 'a:0', '-show_entries', 'stream=codec_type', '-of', 'csv=p=0'], { stdio: ['ignore', 'pipe', 'pipe'] });
-    let out = '', err = '';
-    child.stdout.on('data', (d) => { out += d.toString(); }); child.stderr.on('data', (d) => { err += d.toString(); });
-    child.on('error', reject); child.on('close', (code) => code === 0 ? resolve({ stdout: out }) : reject(new Error(err.slice(-600))));
-  });
-  if (!stdout.trim()) throw new Error('El audio no quedó incorporado al vídeo final.');
+  await runFfmpeg(['-v', 'error', '-i', outputPath, '-map', '0:a:0', '-f', 'null', '-']);
 }
