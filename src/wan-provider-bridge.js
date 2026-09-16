@@ -1,9 +1,9 @@
 import { randomUUID } from 'node:crypto';
 import { generateWanVideo } from './wan-video-provider.js';
 
-// Keep the existing generation pipeline, billing, audio and FFmpeg intact.
-// Only the provider transport is replaced: requests that the old pipeline
-// sends to Pixazo are executed by the WAN 2.2 provider.
+// Compatibility transport: keep the existing Pixazo/LTX HTTP contract used by
+// the generation pipeline, but execute those requests with the WAN 2.2 engine.
+// This preserves billing, status polling, FFmpeg, audio and continuity.
 const nativeFetch = globalThis.fetch.bind(globalThis);
 const providerJobs = new Map();
 const WAN_TEXT_URL = '/ltx-video/v1/text-to-video';
@@ -18,3 +18,54 @@ function response(data, status = 200) {
     headers: { 'Content-Type': 'application/json' }
   });
 }
+
+function isProviderUrl(url) {
+  return url.includes(WAN_TEXT_URL) || url.includes(WAN_IMAGE_URL);
+}
+
+function startWan(body) {
+  const id = randomUUID();
+  const record = { id, status: 'QUEUED', output: '', error: '', createdAt: Date.now(), providerState: 'QUEUED' };
+  providerJobs.set(id, record);
+
+  const aspect = body.aspect || (body.resolution === 'portrait_16_9' ? '9:16' : body.resolution === 'square' ? '1:1' : '16:9');
+  generateWanVideo({
+    prompt: String(body.prompt || '').slice(0, 4000),
+    negative: String(body.negative || '').slice(0, 4000),
+    aspect,
+    job: record
+  }).then(url => {
+    record.status = 'COMPLETED';
+    record.providerState = 'COMPLETED';
+    record.output = url;
+  }).catch(error => {
+    record.status = 'FAILED';
+    record.providerState = 'FAILED';
+    record.error = error?.message || 'WAN 2.2 no pudo completar la generación.';
+  });
+
+  return id;
+}
+
+globalThis.fetch = async (input, init = {}) => {
+  const url = typeof input === 'string' ? input : input?.url || '';
+  const method = String(init.method || input?.method || 'GET').toUpperCase();
+
+  if (isProviderUrl(url) && method === 'POST') {
+    let body = {};
+    try { body = JSON.parse(String(init.body || '{}')); } catch (_) {}
+    const id = startWan(body);
+    return response({ request_id: id });
+  }
+
+  if (url.includes(WAN_STATUS_URL)) {
+    const id = decodeURIComponent(url.split(WAN_STATUS_URL).pop().split('?')[0]);
+    const record = providerJobs.get(id);
+    if (!record) return response({ status: 'ERROR', error: 'No se encontró la generación WAN 2.2.' }, 404);
+    if (record.status === 'COMPLETED') return response({ status: 'COMPLETED', output: { media_url: record.output } });
+    if (record.status === 'FAILED') return response({ status: 'FAILED', error: record.error });
+    return response({ status: record.providerState || 'PROCESSING' });
+  }
+
+  return nativeFetch(input, init);
+};
