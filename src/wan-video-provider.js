@@ -1,28 +1,27 @@
-import { Client } from '@gradio/client';
+import { Client, handle_file } from '@gradio/client';
 
-// WAN 2.2 is now the video engine. Prefer the public, fast 5B text/image-to-video
-// Space and fall back to public WAN 2.2 Spaces if the first one is unavailable.
+// Primary free backend currently running on Hugging Face ZeroGPU.
+// The provider is discovered dynamically through Gradio's view_api(), so UI/API
+// changes in the Space do not require hard-coded parameter positions.
 const configuredSpace = String(process.env.WAN_SPACE_ID || '').trim();
-const isOldWan21 = /wan2\.1/i.test(configuredSpace);
-const PRIMARY_SPACE = configuredSpace && !isOldWan21
-  ? configuredSpace
-  : 'Upsampler/wan-2-2-5b-video';
-const FALLBACK_SPACES = [
-  PRIMARY_SPACE,
-  'Upsampler/wan-2-2-14b-text-to-video',
-  'icehooo5/wan2-video-generation'
-].filter((space, index, list) => space && list.indexOf(space) === index);
+const configuredEndpoint = String(process.env.WAN_ENDPOINT || '').trim();
+const HF_TOKEN = String(process.env.HF_TOKEN || '').trim() || undefined;
 
-const CONFIGURED_ENDPOINT = String(process.env.WAN_ENDPOINT || '').trim();
-const HF_TOKEN = process.env.HF_TOKEN || undefined;
+const DEFAULT_SPACES = [
+  'Upsampler/wan-2-2-5b-video',
+  'pragya2-7/wan-2-2-5b-video',
+  'Wan-AI/Wan-2.2-5B'
+];
+const FALLBACK_SPACES = [configuredSpace, ...DEFAULT_SPACES]
+  .filter(Boolean)
+  .filter((space, index, list) => list.indexOf(space) === index && !/wan2\.1/i.test(space));
+
 const clientPromises = new Map();
 
 function spaceOrigin(space) {
   const [owner, name] = String(space).split('/');
   if (!owner || !name) return '';
-  const normalizedOwner = owner.toLowerCase().replace(/[^a-z0-9-]/g, '-');
-  const normalizedName = name.toLowerCase().replace(/[^a-z0-9-]/g, '-').replace(/-+/g, '-');
-  return `https://${normalizedOwner}-${normalizedName}.hf.space`;
+  return `https://${owner.toLowerCase().replace(/[^a-z0-9-]/g, '-')}-${name.toLowerCase().replace(/[^a-z0-9-]/g, '-').replace(/-+/g, '-')}.hf.space`;
 }
 
 async function getClient(space) {
@@ -32,7 +31,7 @@ async function getClient(space) {
       ...(HF_TOKEN ? { token: HF_TOKEN } : {}),
       events: ['status', 'data'],
       space_status: (status) => console.log('[WAN 2.2]', space, status?.status || 'unknown', status?.message || '')
-    }).catch(error => {
+    }).catch((error) => {
       clientPromises.delete(space);
       throw error;
     }));
@@ -40,26 +39,52 @@ async function getClient(space) {
   return clientPromises.get(space);
 }
 
-function asRemoteUrl(value, space) {
-  if (typeof value !== 'string' || !value) return '';
-  if (/^https?:\/\//i.test(value)) return value;
-  if (value.startsWith('/file=') || value.startsWith('/gradio_api/file=')) return `${spaceOrigin(space)}${value}`;
-  return '';
+function parameterName(parameter) {
+  return String(parameter?.parameter_name || parameter?.label || '').toLowerCase().replace(/[^a-z0-9]+/g, '_');
+}
+
+function parameterChoices(parameter) {
+  return parameter?.parameter_type?.enum || parameter?.choices || parameter?.enum || [];
+}
+
+function defaultValue(parameter) {
+  return parameter?.parameter_default ?? parameter?.default ?? null;
+}
+
+function isFileParameter(parameter) {
+  const name = parameterName(parameter);
+  const text = `${name} ${parameter?.component || ''} ${parameter?.type || ''}`.toLowerCase();
+  return text.includes('image') || text.includes('file') || text.includes('upload');
+}
+
+function preferredModelValue(parameter) {
+  const choices = parameterChoices(parameter);
+  if (!Array.isArray(choices)) return null;
+  const wanted = String(process.env.WAN_MODEL || 'Wan2.2').toLowerCase();
+  const match = choices.find((choice) => String(typeof choice === 'object' ? (choice.value ?? choice.label ?? '') : choice).toLowerCase().includes(wanted));
+  return match == null ? null : (typeof match === 'object' ? (match.value ?? match.label) : match);
+}
+
+function dimensions(aspect) {
+  if (aspect === '9:16') return { width: 480, height: 832 };
+  if (aspect === '1:1') return { width: 624, height: 624 };
+  return { width: 832, height: 480 };
 }
 
 function outputReference(data, space) {
+  const origin = spaceOrigin(space);
   if (data == null) return '';
   if (Array.isArray(data)) {
-    for (const value of data) {
-      const found = outputReference(value, space);
+    for (const item of data) {
+      const found = outputReference(item, space);
       if (found) return found;
     }
     return '';
   }
   if (typeof data === 'string') {
-    const remote = asRemoteUrl(data, space);
-    if (remote) return remote;
-    if (data.toLowerCase().endsWith('.mp4')) return data;
+    if (/^https?:\/\//i.test(data)) return data;
+    if (data.startsWith('/file=') || data.startsWith('/gradio_api/file=')) return `${origin}${data}`;
+    if (/\.mp4(?:\?|$)/i.test(data)) return data;
     return '';
   }
   if (typeof data === 'object') {
@@ -71,138 +96,109 @@ function outputReference(data, space) {
   return '';
 }
 
-function parameterName(parameter) {
-  return String(parameter?.parameter_name || parameter?.label || '').toLowerCase().replace(/[^a-z0-9]+/g, '_');
+function chooseEndpoint(api, space, wantsImage) {
+  const named = api?.named_endpoints || {};
+  const entries = Object.entries(named);
+  if (!entries.length) throw new Error(`El Space ${space} no expone endpoints Gradio.`);
+  if (configuredEndpoint && named[configuredEndpoint]) return [configuredEndpoint, named[configuredEndpoint]];
+
+  const candidates = entries.map(([name, info]) => {
+    const params = Array.isArray(info?.parameters) ? info.parameters : [];
+    const names = params.map(parameterName);
+    const hasPrompt = names.some((value) => value === 'prompt' || value.includes('prompt'));
+    const imageParams = params.filter(isFileParameter);
+    const hasVideoReturn = (info?.returns || []).some((item) => `${item?.label || ''} ${item?.component || ''}`.toLowerCase().includes('video'));
+    const imageName = imageParams.some((p) => parameterName(p).includes('image'));
+    let score = 0;
+    if (hasPrompt) score += 20;
+    if (hasVideoReturn) score += 15;
+    if (name.toLowerCase().includes('generate')) score += 10;
+    if (name.toLowerCase().includes('video')) score += 5;
+    if (wantsImage && imageName) score += 20;
+    if (!wantsImage && imageParams.length === 0) score += 20;
+    if (!wantsImage && imageParams.some((p) => defaultValue(p) == null)) score -= 100;
+    return { name, info, params, score };
+  }).filter((item) => item.params.some((p) => parameterName(p).includes('prompt')))
+    .sort((a, b) => b.score - a.score);
+
+  if (!candidates.length) throw new Error(`El Space ${space} no tiene un endpoint compatible.`);
+  return [candidates[0].name, candidates[0].info];
 }
 
-function hasDefault(parameter) {
-  return Boolean(parameter?.parameter_has_default);
-}
-
-function parameterChoices(parameter) {
-  return parameter?.parameter_type?.enum || parameter?.choices || parameter?.enum || [];
-}
-
-function preferredModelValue(parameter) {
-  const desired = String(process.env.WAN_MODEL || 'Wan2.2').toLowerCase();
-  const choices = parameterChoices(parameter);
-  if (!Array.isArray(choices)) return null;
-  const match = choices.find(choice => {
-    const value = typeof choice === 'object' ? (choice.value ?? choice.label ?? '') : choice;
-    return String(value).toLowerCase().includes(desired);
-  });
-  return match == null ? null : (typeof match === 'object' ? (match.value ?? match.label) : match);
-}
-
-function buildInputs(endpointInfo, prompt, negative, aspect) {
-  const parameters = Array.isArray(endpointInfo?.parameters) ? endpointInfo.parameters : [];
-  const portrait = aspect === '9:16';
-  const square = aspect === '1:1';
-  const height = portrait ? 832 : square ? 624 : 480;
-  const width = portrait ? 480 : square ? 624 : 832;
-  const defaultSteps = Number(process.env.WAN_STEPS || 4);
-  const defaultGuidance = Number(process.env.WAN_GUIDE_SCALE || 5);
-  const defaultFrames = Number(process.env.WAN_FRAMES || 73);
+function buildInputs(endpointInfo, { prompt, negative, aspect, imagePath }) {
+  const params = Array.isArray(endpointInfo?.parameters) ? endpointInfo.parameters : [];
+  const { width, height } = dimensions(aspect);
+  const frames = Number(process.env.WAN_FRAMES || 49);
+  const steps = Number(process.env.WAN_STEPS || 20);
+  const guidance = Number(process.env.WAN_GUIDE_SCALE || 5);
   const values = [];
 
-  for (const parameter of parameters) {
+  for (const parameter of params) {
     const name = parameterName(parameter);
-    let value;
-    if (name.includes('prompt') && !name.includes('negative')) value = prompt;
-    else if (name.includes('negative')) value = String(negative || '');
-    else if (name === 'height' || name.includes('height')) value = height;
-    else if (name === 'width' || name.includes('width')) value = width;
-    else if (name.includes('num_frames') || name.includes('frames') || name.includes('frame_num')) value = defaultFrames;
-    else if (name.includes('duration')) value = 5;
-    else if (name.includes('guidance') || name.includes('cfg')) value = defaultGuidance;
-    else if (name.includes('steps') || name.includes('inference')) value = defaultSteps;
-    else if (name === 'fps' || name.includes('frame_rate')) value = 16;
-    else if (name.includes('seed')) value = -1;
-    else if (name === 'model' || name.includes('model_choice') || name.includes('model_id')) {
-      value = preferredModelValue(parameter) ?? (hasDefault(parameter) ? parameter.parameter_default : null);
-    } else if (name.includes('image') || name.includes('input_video') || name.includes('video')) {
-      if (!hasDefault(parameter)) throw new Error(`El endpoint WAN 2.2 seleccionado requiere un archivo (${parameter.label || name}) y no es compatible con texto a vídeo.`);
-      value = parameter.parameter_default;
-    } else if (hasDefault(parameter)) value = parameter.parameter_default;
-    else if (parameter?.type === 'boolean' || parameter?.component === 'Checkbox') value = false;
-    else if (parameter?.type === 'number' || parameter?.component === 'Number' || parameter?.component === 'Slider') value = 0;
-    else if (parameter?.type === 'string' || parameter?.component === 'Textbox') value = '';
-    else value = null;
+    const lower = name.toLowerCase();
+    let value = defaultValue(parameter);
+
+    if (lower === 'prompt' || (lower.includes('prompt') && !lower.includes('negative'))) value = prompt;
+    else if (lower.includes('negative')) value = String(negative || '');
+    else if (lower === 'height' || lower.includes('height')) value = height;
+    else if (lower === 'width' || lower.includes('width')) value = width;
+    else if (lower.includes('num_frames') || lower === 'frames' || lower.includes('frame_num')) value = frames;
+    else if (lower.includes('duration')) value = 5;
+    else if (lower.includes('sampling_steps') || lower.includes('steps') || lower.includes('inference')) value = steps;
+    else if (lower.includes('guidance') || lower.includes('cfg') || lower.includes('guide_scale')) value = guidance;
+    else if (lower.includes('frame_rate') || lower === 'fps') value = 24;
+    else if (lower.includes('seed')) value = -1;
+    else if (lower === 'model' || lower.includes('model_choice') || lower.includes('model_id')) value = preferredModelValue(parameter) ?? value;
+    else if (isFileParameter(parameter)) {
+      if (imagePath) value = handle_file(imagePath);
+      else if (defaultValue(parameter) != null) value = defaultValue(parameter);
+      else value = null;
+    }
+
+    if (value == null && (parameter?.type === 'boolean' || parameter?.component === 'Checkbox')) value = false;
+    if (value == null && (parameter?.type === 'number' || parameter?.component === 'Number' || parameter?.component === 'Slider')) value = 0;
+    if (value == null && (parameter?.type === 'string' || parameter?.component === 'Textbox')) value = '';
     values.push(value);
   }
   return values;
 }
 
-function chooseEndpoint(api, space) {
-  const named = api?.named_endpoints || {};
-  const entries = Object.entries(named);
-  if (!entries.length) throw new Error(`El Space ${space} no expone endpoints Gradio públicos.`);
-  if (CONFIGURED_ENDPOINT && named[CONFIGURED_ENDPOINT]) return [CONFIGURED_ENDPOINT, named[CONFIGURED_ENDPOINT]];
-
-  const ranked = entries
-    .filter(([, info]) => Array.isArray(info?.parameters))
-    .map(([name, info]) => {
-      const names = info.parameters.map(parameterName);
-      const hasPrompt = names.some(value => value === 'prompt' || value.includes('prompt'));
-      const imageParameters = info.parameters.filter(parameter => {
-        const value = parameterName(parameter);
-        return value.includes('image') || value.includes('input_video');
-      });
-      const hasRequiredImage = imageParameters.some(parameter => !hasDefault(parameter));
-      const hasVideoReturn = (info.returns || []).some(item => {
-        const text = `${item?.label || ''} ${item?.component || ''}`.toLowerCase();
-        return text.includes('video') || text.includes('file');
-      });
-      let score = 0;
-      if (hasPrompt) score += 10;
-      if (hasVideoReturn) score += 5;
-      if (!imageParameters.length) score += 5;
-      if (imageParameters.length && !hasRequiredImage) score += 3;
-      if (name.includes('generate')) score += 8;
-      if (name.includes('t2v')) score += 8;
-      if (name === '/predict') score += 1;
-      return { name, info, score, hasPrompt, hasRequiredImage };
-    })
-    .filter(item => item.hasPrompt && !item.hasRequiredImage)
-    .sort((a, b) => b.score - a.score);
-
-  if (!ranked.length) throw new Error(`El Space ${space} no expone un endpoint WAN 2.2 de texto a vídeo compatible. Endpoints: ${Object.keys(named).join(', ') || 'ninguno'}.`);
-  return [ranked[0].name, ranked[0].info];
-}
-
-export async function generateWanVideo({ prompt, negative, aspect = '16:9', job }) {
-  let lastError = null;
+export async function generateWanVideo({ prompt, negative = '', aspect = '16:9', imagePath = '', job }) {
+  const errors = [];
   for (const space of FALLBACK_SPACES) {
     try {
-      job.detail = `Conectando con WAN 2.2 (${space})…`;
+      if (job) {
+        job.providerState = 'CONNECTING';
+        job.providerEndpoint = space;
+        job.detail = `Conectando con WAN 2.2 (${space})…`;
+      }
       const app = await getClient(space);
       const api = await app.view_api();
-      const [endpoint, endpointInfo] = chooseEndpoint(api, space);
-      const inputs = buildInputs(endpointInfo, prompt, negative, aspect);
-      job.providerState = 'PROCESSING';
-      job.providerEndpoint = `${space}${endpoint}`;
-      job.detail = `WAN 2.2 conectado (${space}, ${endpoint}). Generando el vídeo…`;
-
-      const result = await app.predict(endpoint, inputs);
-      job.gradioJob = null;
-      const reference = outputReference(result?.data ?? result, space);
-      if (!reference) throw new Error(`La respuesta no contiene un vídeo: ${JSON.stringify(result).slice(0, 1200)}`);
-      if (/^https?:\/\//i.test(reference)) {
-        job.providerState = 'COMPLETED';
-        job.detail = `WAN 2.2 terminó (${space}); vídeo preparado para FFmpeg…`;
-        return reference;
+      const [endpoint, endpointInfo] = chooseEndpoint(api, space, Boolean(imagePath));
+      const inputs = buildInputs(endpointInfo, { prompt, negative, aspect, imagePath });
+      if (job) {
+        job.providerState = 'PROCESSING';
+        job.providerEndpoint = `${space}${endpoint}`;
+        job.detail = `WAN 2.2 generando vídeo (${space})…`;
       }
-      throw new Error(`WAN 2.2 devolvió una ruta local no accesible desde Render: ${reference}`);
+      const result = await app.predict(endpoint, inputs);
+      const reference = outputReference(result?.data ?? result, space);
+      if (!reference) throw new Error(`WAN 2.2 no devolvió un archivo de vídeo: ${JSON.stringify(result).slice(0, 1000)}`);
+      if (job) {
+        job.providerState = 'COMPLETED';
+        job.detail = 'WAN 2.2 terminó la generación.';
+      }
+      return reference;
     } catch (error) {
-      lastError = error;
+      errors.push(`${space}: ${error?.message || error}`);
       console.error(`[WAN 2.2] ${space} falló:`, error?.stack || error?.message || error);
-      job.detail = `WAN 2.2 (${space}) no disponible; probando respaldo…`;
+      if (job) job.detail = `WAN 2.2 (${space}) no disponible; probando otro backend gratuito…`;
     }
   }
-  throw new Error(`WAN 2.2 no pudo conectarse a ningún backend público. Último error: ${lastError?.message || lastError || 'desconocido'}`);
+  throw new Error(`No fue posible generar el vídeo con WAN 2.2. ${errors.join(' | ')}`);
 }
 
 export function cancelWanVideo(job) {
-  try { job.gradioJob?.cancel?.(); } catch (_) {}
-  job.gradioJob = null;
+  try { job?.gradioJob?.cancel?.(); } catch (_) {}
+  if (job) job.gradioJob = null;
 }
