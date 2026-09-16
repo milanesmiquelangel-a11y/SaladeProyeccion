@@ -26,46 +26,27 @@
 
   let jobId = null;
   let timer = null;
+  let cancelling = false;
   const json = (key, fallback) => { try { return JSON.parse(localStorage.getItem(key) || JSON.stringify(fallback)); } catch { return fallback; } };
   const save = (key, value) => localStorage.setItem(key, JSON.stringify(value));
 
   function project() {
     return {
-      id: crypto.randomUUID(),
-      name: (projectNameInput.value.trim() || 'AI video').slice(0, 80),
-      prompt: promptInput.value.trim(),
-      audioText: audioTextInput.value.trim(),
-      audioLanguage: audioLanguageInput.value || 'en',
-      negative: negativeInput.value.trim(),
-      aspect: aspectInput.value,
-      duration: Number(durationInput.value),
-      resolution: resolutionInput.value,
-      frameRate: Number(frameRateInput.value),
-      createdAt: Date.now(), updatedAt: Date.now(), status: 'procesando'
+      id: crypto.randomUUID(), name: (projectNameInput.value.trim() || 'AI video').slice(0, 80),
+      prompt: promptInput.value.trim(), audioText: audioTextInput.value.trim(), audioLanguage: audioLanguageInput.value || 'en',
+      negative: negativeInput.value.trim(), aspect: aspectInput.value, duration: Number(durationInput.value),
+      resolution: resolutionInput.value, frameRate: Number(frameRateInput.value), createdAt: Date.now(), updatedAt: Date.now(), status: 'procesando'
     };
   }
 
-  function saveProject(p, extra = {}) {
-    const projects = json('salaProjects', []);
-    projects.unshift({ ...p, ...extra, updatedAt: Date.now() });
-    save('salaProjects', projects.slice(0, 30));
+  function saveProject(p, extra = {}) { const projects = json('salaProjects', []); projects.unshift({ ...p, ...extra, updatedAt: Date.now() }); save('salaProjects', projects.slice(0, 30)); }
+  function saveHistory(p, url) { const items = json('salaHistory', []); items.unshift({ name: p.name, prompt: p.prompt, audioText: p.audioText, audioLanguage: p.audioLanguage, aspect: p.aspect, duration: p.duration, date: Date.now(), status: 'completado', url }); save('salaHistory', items.slice(0, 20)); }
+  function setLoading(title, detail) { emptyState.classList.add('hidden'); loadingState.classList.remove('hidden'); loadingTitle.textContent = title; loadingDetail.textContent = detail; statusText.textContent = 'Procesando'; }
+  function resetAfterCancel(message = 'Generación cancelada. El crédito fue devuelto.') {
+    cancelling = true; clearTimeout(timer); jobId = null; loadingState.classList.add('hidden'); errorBox.classList.add('hidden'); errorBox.textContent = '';
+    statusText.textContent = 'Listo para una nueva generación'; generateBtn.disabled = false; cancelBtn.disabled = true;
   }
-
-  function saveHistory(p, url) {
-    const items = json('salaHistory', []);
-    items.unshift({ name: p.name, prompt: p.prompt, audioText: p.audioText, audioLanguage: p.audioLanguage, aspect: p.aspect, duration: p.duration, date: Date.now(), status: 'completado', url });
-    save('salaHistory', items.slice(0, 20));
-  }
-
-  function setLoading(title, detail) {
-    emptyState.classList.add('hidden'); loadingState.classList.remove('hidden');
-    loadingTitle.textContent = title; loadingDetail.textContent = detail; statusText.textContent = 'Procesando';
-  }
-
-  function fail(message) {
-    clearTimeout(timer); loadingState.classList.add('hidden'); errorBox.textContent = message; errorBox.classList.remove('hidden'); statusText.textContent = 'Error';
-    generateBtn.disabled = false; cancelBtn.disabled = true; jobId = null;
-  }
+  function fail(message) { clearTimeout(timer); loadingState.classList.add('hidden'); errorBox.textContent = message; errorBox.classList.remove('hidden'); statusText.textContent = 'Error'; generateBtn.disabled = false; cancelBtn.disabled = true; jobId = null; }
 
   async function poll(id, p) {
     jobId = id; clearTimeout(timer);
@@ -74,44 +55,48 @@
       const data = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(data.error || 'No se pudo consultar la generación.');
       if (data.status === 'COMPLETED' && data.outputUrl) {
-        videoPlayer.src = data.outputUrl; videoPlayer.classList.remove('hidden');
-        videoLink.href = data.outputUrl; videoLink.classList.remove('hidden');
+        videoPlayer.src = data.outputUrl; videoPlayer.classList.remove('hidden'); videoLink.href = data.outputUrl; videoLink.classList.remove('hidden');
         loadingState.classList.add('hidden'); statusText.textContent = p.audioText ? 'Completado · vídeo + audio' : 'Completado';
         saveHistory(p, data.outputUrl); saveProject(p, { status: 'completado', sequenceId: id, url: data.outputUrl });
         generateBtn.disabled = false; cancelBtn.disabled = true; jobId = null; return;
       }
       if (data.status === 'ERROR') throw new Error(data.detail || 'La generación no pudo completarse.');
-      if (data.status === 'CANCELLED') throw new Error(data.detail || 'Generación cancelada.');
+      if (data.status === 'CANCELLED') { resetAfterCancel(); return; }
+      if (cancelling) return;
       setLoading('Generando vídeo + audio…', data.detail || 'Procesando tu prompt y preparando la narración.');
       timer = setTimeout(() => poll(id, p), 5000);
-    } catch (e) { fail(e.message || 'No se pudo completar la generación.'); }
+    } catch (e) {
+      if (cancelling) return;
+      fail(e.message || 'No se pudo completar la generación.');
+    }
   }
 
   form.addEventListener('submit', async (event) => {
-    // 5-second videos use app.js -> /api/video/generate so the normal
-    // generation flow and audio-request-fix.js can handle narration.
     if (Number(durationInput.value) <= 5) return;
     if (imageInput.files?.length || !audioTextInput.value.trim()) return;
     event.preventDefault(); event.stopImmediatePropagation();
-    clearTimeout(timer); errorBox.classList.add('hidden'); generateBtn.disabled = true; cancelBtn.disabled = false;
+    clearTimeout(timer); cancelling = false; errorBox.classList.add('hidden'); generateBtn.disabled = true; cancelBtn.disabled = false;
     const p = project();
     try {
       setLoading('Preparando vídeo + audio…', 'Tu prompt controla el vídeo y tu texto controla la narración.');
-      const response = await fetch('/api/video/sequence', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ prompt: p.prompt, negative: p.negative, aspect: p.aspect, duration: p.duration, resolution: p.resolution, frameRate: p.frameRate, audioText: p.audioText, audioLanguage: p.audioLanguage })
-      });
+      const response = await fetch('/api/video/sequence', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ prompt: p.prompt, negative: p.negative, aspect: p.aspect, duration: p.duration, resolution: p.resolution, frameRate: p.frameRate, audioText: p.audioText, audioLanguage: p.audioLanguage }) });
       const data = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(data.error || 'No se pudo iniciar la generación.');
-      saveProject(p, { sequenceId: data.job_id });
-      await poll(data.job_id, p);
-    } catch (e) { fail(e.message || 'No se pudo iniciar la generación.'); }
+      saveProject(p, { sequenceId: data.job_id }); await poll(data.job_id, p);
+    } catch (e) { if (!cancelling) fail(e.message || 'No se pudo iniciar la generación.'); }
   }, true);
 
   cancelBtn?.addEventListener('click', async (event) => {
-    if (!jobId) return;
-    event.preventDefault(); event.stopImmediatePropagation(); clearTimeout(timer);
-    await fetch(`/api/video/sequence/${encodeURIComponent(jobId)}/cancel`, { method: 'POST' }).catch(() => {});
-    jobId = null; loadingState.classList.add('hidden'); statusText.textContent = 'Cancelado'; generateBtn.disabled = false; cancelBtn.disabled = true;
+    if (!jobId || cancelling) return;
+    event.preventDefault(); event.stopImmediatePropagation();
+    const id = jobId;
+    resetAfterCancel();
+    try {
+      const response = await fetch(`/api/video/sequence/${encodeURIComponent(id)}/cancel`, { method: 'POST', cache: 'no-store' });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) console.warn('[Cancel] El servidor no confirmó la cancelación:', data.error || response.status);
+    } catch (error) {
+      console.warn('[Cancel] No se pudo confirmar la cancelación con el servidor:', error);
+    }
   }, true);
 })();
