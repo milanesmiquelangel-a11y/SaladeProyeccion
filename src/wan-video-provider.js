@@ -1,86 +1,72 @@
 import { Client } from '@gradio/client';
-import fs from 'node:fs/promises';
-import path from 'node:path';
-import { randomUUID } from 'node:crypto';
 
-// The previous public fffiloni/Wan2.1 Space is not a public inference backend:
-// its own UI says it must be duplicated and given a GPU. Calling it from our
-// server therefore produced the exact "Error executing command" seen by users.
-// Use a public ZeroGPU T2V 1.3B Space instead. It keeps WAN 2.1 and does not
-// require us to run the model on Render.
+// Keep WAN 2.1 T2V 1.3B as the primary backend. If the public ZeroGPU
+// Space cannot expose its Gradio API, fall back to another public Space that
+// contains the same 1.3B model instead of failing the whole generation.
 const configuredSpace = String(process.env.WAN_SPACE_ID || '').trim();
-const SPACE = configuredSpace && configuredSpace !== 'fffiloni/Wan2.1'
+const PRIMARY_SPACE = configuredSpace && configuredSpace !== 'fffiloni/Wan2.1'
   ? configuredSpace
   : '0AstroKnight0/wan2.1-t2v-1.3b-demo';
+const FALLBACK_SPACES = [PRIMARY_SPACE, 'mr2along/Wan-2.1-T2V-1.3B-GPU']
+  .filter((space, index, list) => space && list.indexOf(space) === index);
+
 const CONFIGURED_ENDPOINT = String(process.env.WAN_ENDPOINT || '').trim();
 const HF_TOKEN = process.env.HF_TOKEN || undefined;
-const generatedDir = path.join(process.cwd(), 'public', 'generated');
-let clientPromise;
+const clientPromises = new Map();
 
 function spaceOrigin(space) {
   const [owner, name] = String(space).split('/');
   if (!owner || !name) return '';
-  // Hugging Face Space hostnames normalize punctuation in the repo name to
-  // hyphens. This is important for IDs such as wan2.1-t2v-1.3b-demo.
   const normalizedOwner = owner.toLowerCase().replace(/[^a-z0-9-]/g, '-');
   const normalizedName = name.toLowerCase().replace(/[^a-z0-9-]/g, '-').replace(/-+/g, '-');
   return `https://${normalizedOwner}-${normalizedName}.hf.space`;
 }
 
-const SPACE_ORIGIN = spaceOrigin(SPACE);
-
-async function getClient() {
-  if (!clientPromise) {
-    clientPromise = Client.connect(SPACE, {
+async function getClient(space) {
+  if (!clientPromises.has(space)) {
+    const origin = spaceOrigin(space);
+    clientPromises.set(space, Client.connect(origin, {
       ...(HF_TOKEN ? { token: HF_TOKEN } : {}),
       events: ['status', 'data'],
-      space_status: (status) => console.log('[WAN]', status?.status || 'unknown', status?.message || '')
-    });
+      space_status: (status) => console.log('[WAN]', space, status?.status || 'unknown', status?.message || '')
+    }).catch(error => {
+      clientPromises.delete(space);
+      throw error;
+    }));
   }
-  return clientPromise;
+  return clientPromises.get(space);
 }
 
-function asRemoteUrl(value) {
+function asRemoteUrl(value, space) {
   if (typeof value !== 'string' || !value) return '';
   if (/^https?:\/\//i.test(value)) return value;
   if (value.startsWith('/file=') || value.startsWith('/gradio_api/file=')) {
-    return `${SPACE_ORIGIN}${value}`;
+    return `${spaceOrigin(space)}${value}`;
   }
   return '';
 }
 
-function outputReference(data) {
+function outputReference(data, space) {
   if (data == null) return '';
-
   if (Array.isArray(data)) {
     for (const value of data) {
-      const found = outputReference(value);
+      const found = outputReference(value, space);
       if (found) return found;
     }
     return '';
   }
-
   if (typeof data === 'string') {
-    const remote = asRemoteUrl(data);
+    const remote = asRemoteUrl(data, space);
     if (remote) return remote;
     if (data.toLowerCase().endsWith('.mp4')) return data;
     return '';
   }
-
   if (typeof data === 'object') {
-    for (const candidate of [
-      data.url,
-      data.path,
-      data.video?.url,
-      data.video?.path,
-      data.data,
-      data.video?.data
-    ]) {
-      const found = outputReference(candidate);
+    for (const candidate of [data.url, data.path, data.video?.url, data.video?.path, data.data, data.video?.data]) {
+      const found = outputReference(candidate, space);
       if (found) return found;
     }
   }
-
   return '';
 }
 
@@ -90,6 +76,21 @@ function parameterName(parameter) {
 
 function hasDefault(parameter) {
   return Boolean(parameter?.parameter_has_default);
+}
+
+function parameterChoices(parameter) {
+  return parameter?.parameter_type?.enum || parameter?.choices || parameter?.enum || [];
+}
+
+function preferredModelValue(parameter) {
+  const desired = String(process.env.WAN_MODEL || 'Wan2.1-T2V-1.3B').toLowerCase();
+  const choices = parameterChoices(parameter);
+  if (!Array.isArray(choices)) return null;
+  const match = choices.find(choice => {
+    const value = typeof choice === 'object' ? (choice.value ?? choice.label ?? '') : choice;
+    return String(value).toLowerCase().includes(desired);
+  });
+  return match == null ? null : (typeof match === 'object' ? (match.value ?? match.label) : match);
 }
 
 function buildInputs(endpointInfo, prompt, negative, aspect) {
@@ -106,7 +107,6 @@ function buildInputs(endpointInfo, prompt, negative, aspect) {
   for (const parameter of parameters) {
     const name = parameterName(parameter);
     let value;
-
     if (name.includes('prompt') && !name.includes('negative')) value = prompt;
     else if (name.includes('negative')) value = String(negative || '');
     else if (name === 'height' || name.includes('height')) value = height;
@@ -117,7 +117,9 @@ function buildInputs(endpointInfo, prompt, negative, aspect) {
     else if (name.includes('steps') || name.includes('inference')) value = defaultSteps;
     else if (name === 'fps' || name.includes('frame_rate')) value = 16;
     else if (name.includes('seed')) value = -1;
-    else if (name.includes('image') || name.includes('input_video') || name.includes('video')) {
+    else if (name === 'model' || name.includes('model_choice') || name.includes('model_id')) {
+      value = preferredModelValue(parameter) ?? (hasDefault(parameter) ? parameter.parameter_default : 'Wan2.1-T2V-1.3B');
+    } else if (name.includes('image') || name.includes('input_video') || name.includes('video')) {
       if (!hasDefault(parameter)) throw new Error(`El endpoint WAN seleccionado requiere un archivo (${parameter.label || name}) y no es compatible con texto a vídeo.`);
       value = parameter.parameter_default;
     } else if (hasDefault(parameter)) value = parameter.parameter_default;
@@ -125,18 +127,15 @@ function buildInputs(endpointInfo, prompt, negative, aspect) {
     else if (parameter?.type === 'number' || parameter?.component === 'Number' || parameter?.component === 'Slider') value = 0;
     else if (parameter?.type === 'string' || parameter?.component === 'Textbox') value = '';
     else value = null;
-
     values.push(value);
   }
-
   return values;
 }
 
-function chooseEndpoint(api) {
+function chooseEndpoint(api, space) {
   const named = api?.named_endpoints || {};
   const entries = Object.entries(named);
-  if (!entries.length) throw new Error(`El Space ${SPACE} no expone endpoints Gradio públicos.`);
-
+  if (!entries.length) throw new Error(`El Space ${space} no expone endpoints Gradio públicos.`);
   if (CONFIGURED_ENDPOINT && named[CONFIGURED_ENDPOINT]) return [CONFIGURED_ENDPOINT, named[CONFIGURED_ENDPOINT]];
 
   const ranked = entries
@@ -145,59 +144,53 @@ function chooseEndpoint(api) {
       const names = info.parameters.map(parameterName);
       const hasPrompt = names.some(value => value === 'prompt' || value.includes('prompt'));
       const hasImage = names.some(value => value.includes('image') || value.includes('input_video'));
-      const hasVideoReturn = (info.returns || []).some(item => {
-        const text = `${item?.label || ''} ${item?.component || ''}`.toLowerCase();
-        return text.includes('video') || text.includes('file');
-      });
+      const hasVideoReturn = (info.returns || []).some(item => `${item?.label || ''} ${item?.component || ''}`.toLowerCase().includes('video') || `${item?.label || ''} ${item?.component || ''}`.toLowerCase().includes('file'));
       let score = 0;
       if (hasPrompt) score += 10;
       if (hasVideoReturn) score += 5;
       if (!hasImage) score += 5;
       if (name === '/generate_video') score += 10;
+      if (name === '/t2v_generation') score += 9;
       if (name === '/predict') score += 1;
       return { name, info, score, hasPrompt, hasImage };
     })
     .filter(item => item.hasPrompt && !item.hasImage)
     .sort((a, b) => b.score - a.score);
 
-  if (!ranked.length) {
-    throw new Error(`El Space ${SPACE} no expone un endpoint WAN 2.1 de texto a vídeo compatible. Endpoints: ${Object.keys(named).join(', ') || 'ninguno'}.`);
-  }
-
+  if (!ranked.length) throw new Error(`El Space ${space} no expone un endpoint WAN 2.1 de texto a vídeo compatible. Endpoints: ${Object.keys(named).join(', ') || 'ninguno'}.`);
   return [ranked[0].name, ranked[0].info];
 }
 
 export async function generateWanVideo({ prompt, negative, aspect = '16:9', job }) {
-  const app = await getClient();
-  const api = await app.view_api();
-  const [endpoint, endpointInfo] = chooseEndpoint(api);
-  const inputs = buildInputs(endpointInfo, prompt, negative, aspect);
+  let lastError = null;
+  for (const space of FALLBACK_SPACES) {
+    try {
+      job.detail = `Conectando con WAN 2.1 (${space})…`;
+      const app = await getClient(space);
+      const api = await app.view_api();
+      const [endpoint, endpointInfo] = chooseEndpoint(api, space);
+      const inputs = buildInputs(endpointInfo, prompt, negative, aspect);
+      job.providerState = 'PROCESSING';
+      job.providerEndpoint = `${space}${endpoint}`;
+      job.detail = `WAN 2.1 conectado (${space}, ${endpoint}). Generando el vídeo…`;
 
-  job.providerState = 'PROCESSING';
-  job.providerEndpoint = endpoint;
-  job.detail = `WAN 2.1 conectado (${SPACE}, ${endpoint}). Generando el vídeo…`;
-
-  let result;
-  try {
-    result = await app.predict(endpoint, inputs);
-  } catch (error) {
-    const reason = error?.message || String(error);
-    throw new Error(`WAN 2.1 no pudo generar el vídeo: ${reason}`);
+      const result = await app.predict(endpoint, inputs);
+      job.gradioJob = null;
+      const reference = outputReference(result?.data ?? result, space);
+      if (!reference) throw new Error(`La respuesta no contiene un vídeo: ${JSON.stringify(result).slice(0, 1200)}`);
+      if (/^https?:\/\//i.test(reference)) {
+        job.providerState = 'COMPLETED';
+        job.detail = `WAN 2.1 terminó (${space}); vídeo preparado para FFmpeg…`;
+        return reference;
+      }
+      throw new Error(`WAN 2.1 devolvió una ruta local no accesible desde Render: ${reference}`);
+    } catch (error) {
+      lastError = error;
+      console.error(`[WAN] ${space} falló:`, error?.stack || error?.message || error);
+      job.detail = `WAN 2.1 (${space}) no disponible; probando respaldo…`;
+    }
   }
-
-  job.gradioJob = null;
-  const reference = outputReference(result?.data ?? result);
-  if (!reference) {
-    throw new Error(`WAN 2.1 terminó, pero la respuesta no contiene un vídeo. Respuesta: ${JSON.stringify(result).slice(0, 1600)}`);
-  }
-
-  if (/^https?:\/\//i.test(reference)) {
-    job.providerState = 'COMPLETED';
-    job.detail = 'WAN 2.1 terminó; vídeo preparado para FFmpeg…';
-    return reference;
-  }
-
-  throw new Error(`WAN 2.1 devolvió una ruta local no accesible desde Render: ${reference}`);
+  throw new Error(`WAN 2.1 no pudo conectarse a ningún backend público. Último error: ${lastError?.message || lastError || 'desconocido'}`);
 }
 
 export function cancelWanVideo(job) {
