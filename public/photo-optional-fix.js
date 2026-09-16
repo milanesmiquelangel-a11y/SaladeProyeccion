@@ -26,6 +26,7 @@
 
   let jobId = null;
   let timer = null;
+  let cancelling = false;
   const json = (key, fallback) => { try { return JSON.parse(localStorage.getItem(key) || JSON.stringify(fallback)); } catch { return fallback; } };
   const save = (key, value) => localStorage.setItem(key, JSON.stringify(value));
 
@@ -58,11 +59,13 @@
   }
 
   function setLoading(title, detail) {
+    if (cancelling) return;
     emptyState.classList.add('hidden'); loadingState.classList.remove('hidden');
     loadingTitle.textContent = title; loadingDetail.textContent = detail; statusText.textContent = 'Procesando';
   }
 
   function fail(message) {
+    if (cancelling) return;
     clearTimeout(timer); loadingState.classList.add('hidden'); errorBox.textContent = message; errorBox.classList.remove('hidden'); statusText.textContent = 'Error';
     generateBtn.disabled = false; cancelBtn.disabled = true; jobId = null;
   }
@@ -72,6 +75,7 @@
     try {
       const response = await fetch(`/api/video/sequence/${encodeURIComponent(id)}`, { cache: 'no-store' });
       const data = await response.json().catch(() => ({}));
+      if (cancelling || jobId !== id) return;
       if (!response.ok) throw new Error(data.error || 'No se pudo consultar la generación.');
       if (data.status === 'COMPLETED' && data.outputUrl) {
         videoPlayer.src = data.outputUrl; videoPlayer.classList.remove('hidden');
@@ -81,10 +85,10 @@
         generateBtn.disabled = false; cancelBtn.disabled = true; jobId = null; return;
       }
       if (data.status === 'ERROR') throw new Error(data.detail || 'La generación no pudo completarse.');
-      if (data.status === 'CANCELLED') throw new Error(data.detail || 'Generación cancelada.');
+      if (data.status === 'CANCELLED') { cancelling = true; clearTimeout(timer); loadingState.classList.add('hidden'); statusText.textContent = 'Listo para una nueva generación'; generateBtn.disabled = false; cancelBtn.disabled = true; jobId = null; return; }
       setLoading('Generando vídeo + audio…', data.detail || 'Procesando tu prompt y preparando la narración.');
       timer = setTimeout(() => poll(id, p), 5000);
-    } catch (e) { fail(e.message || 'No se pudo completar la generación.'); }
+    } catch (e) { if (!cancelling) fail(e.message || 'No se pudo completar la generación.'); }
   }
 
   form.addEventListener('submit', async (event) => {
@@ -93,7 +97,7 @@
     if (Number(durationInput.value) <= 5) return;
     if (imageInput.files?.length || !audioTextInput.value.trim()) return;
     event.preventDefault(); event.stopImmediatePropagation();
-    clearTimeout(timer); errorBox.classList.add('hidden'); generateBtn.disabled = true; cancelBtn.disabled = false;
+    clearTimeout(timer); cancelling = false; errorBox.classList.add('hidden'); generateBtn.disabled = true; cancelBtn.disabled = false;
     const p = project();
     try {
       setLoading('Preparando vídeo + audio…', 'Tu prompt controla el vídeo y tu texto controla la narración.');
@@ -105,13 +109,26 @@
       if (!response.ok) throw new Error(data.error || 'No se pudo iniciar la generación.');
       saveProject(p, { sequenceId: data.job_id });
       await poll(data.job_id, p);
-    } catch (e) { fail(e.message || 'No se pudo iniciar la generación.'); }
+    } catch (e) { if (!cancelling) fail(e.message || 'No se pudo iniciar la generación.'); }
   }, true);
 
   cancelBtn?.addEventListener('click', async (event) => {
-    if (!jobId) return;
-    event.preventDefault(); event.stopImmediatePropagation(); clearTimeout(timer);
-    await fetch(`/api/video/sequence/${encodeURIComponent(jobId)}/cancel`, { method: 'POST' }).catch(() => {});
-    jobId = null; loadingState.classList.add('hidden'); statusText.textContent = 'Cancelado'; generateBtn.disabled = false; cancelBtn.disabled = true;
+    if (!jobId || cancelling) return;
+    event.preventDefault(); event.stopImmediatePropagation();
+    const id = jobId;
+    cancelling = true;
+    clearTimeout(timer);
+    jobId = null;
+    loadingState.classList.add('hidden');
+    errorBox.classList.add('hidden');
+    statusText.textContent = 'Listo para una nueva generación';
+    generateBtn.disabled = false;
+    cancelBtn.disabled = true;
+    try {
+      const response = await fetch(`/api/video/sequence/${encodeURIComponent(id)}/cancel`, { method: 'POST', cache: 'no-store' });
+      if (!response.ok) console.warn('[Cancel] El servidor no confirmó la cancelación:', response.status);
+    } catch (error) {
+      console.warn('[Cancel] No se pudo confirmar la cancelación con el servidor:', error);
+    }
   }, true);
 })();
