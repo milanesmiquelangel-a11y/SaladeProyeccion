@@ -6,285 +6,228 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { randomUUID } from 'node:crypto';
 import ffmpegPath from 'ffmpeg-static';
+import { checkDatabase } from './database.js';
 import { finalizeGeneration, refundGeneration } from './billing-ledger.js';
-import { generateSpeechAudio } from './audio-tts.js';
+import { generateSpeechAudio, muxAudioIntoVideo, normalizeAudioLanguage } from './audio-tts.js';
+import { generateWanVideo, cancelWanVideo } from './wan-video-provider.js';
 
 const execFileAsync = promisify(execFile);
 const nativePost = express.application.post;
 const nativeGet = express.application.get;
-const TEXT_URL = process.env.PIXAZO_VIDEO_URL || 'https://gateway.pixazo.ai/ltx-video/v1/text-to-video';
-const IMAGE_URL = process.env.PIXAZO_IMAGE_VIDEO_URL || 'https://gateway.pixazo.ai/ltx-video/v1/image-to-video';
-const STATUS_URL = process.env.PIXAZO_STATUS_URL || 'https://gateway.pixazo.ai/v2/requests/status';
-const PIXAZO_API_KEY = process.env.PIXAZO_API_KEY;
 const jobs = new Map();
 const generatedDir = path.join(process.cwd(), 'public', 'generated');
 const audioDir = path.join(process.cwd(), 'public', 'generated-audio');
-const TIMEOUT = 20 * 60 * 1000;
-const NEGATIVE = 'deformed subject, melted subject, duplicate subject, extra limbs, missing limbs, distorted face, distorted hands, duplicate people, merged bodies, floating objects, impossible physics, warped background, unreadable text, cartoon, CGI, unrelated subject, unrelated scene, frozen subject, static frame';
+const TIMEOUT_MS = 20 * 60 * 1000;
+const ALLOWED_DURATIONS = new Set([5, 10, 15, 20, 25, 30, 60]);
+const NEGATIVE = 'unrelated subject, unrelated object, deformed subject, melted subject, duplicate subject, extra limbs, missing limbs, distorted face, distorted hands, merged bodies, floating objects, impossible physics, warped background, unreadable text, cartoon, CGI, frozen frame, static image';
 
-function cfg(body = {}) {
+function settings(body = {}) {
   const aspect = ['16:9', '9:16', '1:1'].includes(body.aspect) ? body.aspect : '16:9';
-  const high = body.resolution === 'high';
-  const fps = Number(body.frameRate) === 30 ? 30 : 24;
-  const size = high ? 1024 : 768;
-  const short = Math.round((size * 9) / 16 / 32) * 32;
-  const [width, height] = aspect === '9:16' ? [short, size] : aspect === '1:1' ? [size, size] : [size, short];
-  return { aspect, width, height, fps };
+  return { aspect, resolution: body.resolution === 'high' ? 'high' : 'standard', fps: Number(body.frameRate) === 30 ? 30 : 24 };
 }
 
-function promptFor(base, i, count, hasReference) {
-  const text = String(base || '').trim();
-  const instruction = hasReference
-    ? 'CONTINUE DIRECTLY FROM THE SUPPLIED FINAL FRAME. Preserve the exact same subject identity, appearance, environment, lighting, camera position and visual style. Continue the same action naturally from that exact moment. Do not restart the scene, do not jump in time, do not change location, and do not introduce unrelated subjects.'
-    : 'START THE VIDEO EXACTLY FROM THE USER REQUEST. Keep one continuous scene with one coherent subject, setting and action. No cuts, no scene changes, no time jumps, and no unrelated subjects.';
-  return `${text}\n${instruction} This is segment ${i + 1} of ${count} of one continuous video.`.slice(0, 4000);
-}
-
-async function submit(url, prompt, negative, settings, seconds, signal, reference = null) {
-  const payload = {
-    prompt,
-    negative: [negative, NEGATIVE].filter(Boolean).join(', ').slice(0, 4000),
-    seed: Math.floor(Math.random() * 2147483647),
-    aspect: settings.aspect,
-    width: settings.width,
-    height: settings.height,
-    num_frames: 121,
-    frame_rate: settings.fps,
-    enhance_prompt: false
-  };
-  if (reference) {
-    payload.image_url = reference;
-    payload.strength = 1.0;
-  }
-  const r = await fetch(url, { method: 'POST', signal, headers: { 'Content-Type': 'application/json', 'Ocp-Apim-Subscription-Key': PIXAZO_API_KEY }, body: JSON.stringify(payload) });
-  const d = await r.json().catch(() => ({}));
-  if (!r.ok) throw new Error(d?.message || d?.error || d?.detail || `Pixazo rechazó la solicitud (HTTP ${r.status}).`);
-  const id = d.request_id || d.requestId;
-  if (!id) throw new Error('Pixazo no devolvió un identificador de generación.');
-  return id;
-}
-
-async function waitFor(id, signal, job) {
-  const end = Date.now() + TIMEOUT;
-  while (Date.now() < end) {
-    if (signal.aborted || job.cancelled) throw Object.assign(new Error('Generación cancelada.'), { code: 'CANCELLED' });
-    const r = await fetch(`${STATUS_URL}/${encodeURIComponent(id)}`, { signal, headers: { 'Ocp-Apim-Subscription-Key': PIXAZO_API_KEY } });
-    const d = await r.json().catch(() => ({}));
-    if (!r.ok) throw new Error(d?.message || d?.error || `Pixazo no pudo consultar el estado (HTTP ${r.status}).`);
-    const state = String(d.status || d.state || '').toUpperCase();
-    job.providerState = state;
-    if (state === 'COMPLETED' || state === 'SUCCEEDED' || d.output?.media_url) {
-      const raw = d.output?.media_url;
-      const url = Array.isArray(raw) ? raw[0] : raw;
-      if (!url) throw new Error('Pixazo terminó sin devolver un vídeo.');
-      return url;
-    }
-    if (['ERROR', 'FAILED', 'CANCELLED'].includes(state)) throw Object.assign(new Error(d.error || `La generación terminó con estado ${state}.`), { code: state === 'CANCELLED' ? 'CANCELLED' : 'FAILED' });
-    await new Promise(resolve => setTimeout(resolve, 5000));
-  }
-  throw Object.assign(new Error('La generación superó el límite de 20 minutos.'), { code: 'TIMEOUT' });
+function promptFor(base, index, total, continued) {
+  const clean = String(base || '').trim().slice(0, 3600);
+  const continuity = continued
+    ? 'Continue directly from the supplied final frame. Preserve the exact same subject, identity, environment, lighting and camera style. Continue the action naturally; do not restart, jump in time or introduce unrelated subjects.'
+    : 'Follow the user request exactly. Keep the requested subject, action and environment as the dominant content. Do not substitute a different subject or add an unrelated scene.';
+  return `${clean}\n\n${continuity}\nThis is segment ${index + 1} of ${total} of one continuous video.`;
 }
 
 async function download(url, file) {
-  const r = await fetch(url);
-  if (!r.ok) throw new Error(`No se pudo descargar el clip generado (HTTP ${r.status}).`);
-  await fs.writeFile(file, Buffer.from(await r.arrayBuffer()));
+  const response = await fetch(url);
+  if (!response.ok) throw new Error(`No se pudo descargar el vídeo generado (HTTP ${response.status}).`);
+  await fs.writeFile(file, Buffer.from(await response.arrayBuffer()));
 }
 
-async function hasRealMotion(source) {
-  const { stdout } = await execFileAsync(ffmpegPath, ['-v', 'error', '-i', source, '-vf', 'fps=2,format=gray', '-f', 'framemd5', '-'], { maxBuffer: 4 * 1024 * 1024 });
-  const hashes = stdout.split(/\r?\n/).filter(line => /^0,/.test(line)).map(line => line.trim().split(',').pop());
-  if (hashes.length < 4) return false;
-  let same = 0;
-  for (let i = 1; i < hashes.length; i += 1) if (hashes[i] === hashes[i - 1]) same += 1;
-  return same / (hashes.length - 1) < 0.30;
+async function hasRealMotion(file) {
+  if (!ffmpegPath) return true;
+  try {
+    const { stdout } = await execFileAsync(ffmpegPath, ['-v', 'error', '-i', file, '-vf', 'fps=2,format=gray', '-f', 'framemd5', '-'], { maxBuffer: 4 * 1024 * 1024 });
+    const hashes = stdout.split(/\r?\n/).filter((line) => /^0,/.test(line)).map((line) => line.trim().split(',').pop());
+    if (hashes.length < 4) return true;
+    let same = 0;
+    for (let i = 1; i < hashes.length; i += 1) if (hashes[i] === hashes[i - 1]) same += 1;
+    return same / (hashes.length - 1) < 0.9;
+  } catch (_) { return true; }
 }
 
 async function normalize(source, target, fps, seconds) {
-  if (!ffmpegPath) throw new Error('FFmpeg no está disponible para normalizar el vídeo.');
-  const duration = Math.max(1, Number(seconds) || 5);
-  // Pixazo/LTX puede devolver clips algo más cortos que 5 s. Clonamos hasta
-  // disponer de margen y luego recortamos exactamente a la duración solicitada.
-  await execFileAsync(ffmpegPath, [
-    '-y', '-i', source,
-    '-map', '0:v:0',
-    '-vf', `fps=${fps},tpad=stop_mode=clone:stop_duration=1`,
-    '-t', String(duration),
-    '-an', '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '20',
-    '-pix_fmt', 'yuv420p', '-movflags', '+faststart', target
-  ], { maxBuffer: 1024 * 1024 });
+  await execFileAsync(ffmpegPath, ['-y', '-i', source, '-map', '0:v:0', '-vf', `fps=${fps},tpad=stop_mode=clone:stop_duration=1`, '-t', String(seconds), '-an', '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '20', '-pix_fmt', 'yuv420p', '-movflags', '+faststart', target], { maxBuffer: 1024 * 1024 });
 }
 
 async function lastFrame(video, image) {
-  await execFileAsync(ffmpegPath, ['-y', '-sseof', '-0.12', '-i', video, '-frames:v', '1', '-q:v', '2', image], { maxBuffer: 1024 * 1024 });
+  await execFileAsync(ffmpegPath, ['-y', '-sseof', '-0.15', '-i', video, '-frames:v', '1', '-q:v', '2', image], { maxBuffer: 1024 * 1024 });
 }
 
 async function concat(clips, output) {
   const list = path.join(path.dirname(output), `concat-${randomUUID()}.txt`);
-  await fs.writeFile(list, `${clips.map(p => `file '${p.replaceAll("'", "'\\''")}'`).join('\n')}\n`, 'utf8');
+  await fs.writeFile(list, `${clips.map((p) => `file '${p.replaceAll("'", "'\\''")}'`).join('\n')}\n`, 'utf8');
   try {
     await execFileAsync(ffmpegPath, ['-y', '-f', 'concat', '-safe', '0', '-i', list, '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '20', '-pix_fmt', 'yuv420p', '-movflags', '+faststart', output], { maxBuffer: 1024 * 1024 });
   } finally { await fs.rm(list, { force: true }); }
 }
 
-async function mux(video, audio, output, seconds) {
-  await execFileAsync(ffmpegPath, ['-y', '-i', video, '-stream_loop', '-1', '-i', audio, '-map', '0:v:0', '-map', '1:a:0', '-t', String(seconds), '-c:v', 'copy', '-c:a', 'aac', '-b:a', '128k', '-movflags', '+faststart', output], { maxBuffer: 1024 * 1024 });
-  const { stdout } = await execFileAsync(ffmpegPath, ['-v', 'error', '-i', output, '-select_streams', 'a:0', '-show_entries', 'stream=codec_type', '-of', 'csv=p=0'], { maxBuffer: 1024 * 1024 });
-  if (!stdout.trim()) throw new Error('El audio se generó pero no quedó incorporado al vídeo final.');
-}
-
-async function generateSegment(job, body, settings, work, index, count, seconds, reference) {
-  job.currentScene = index + 1;
-  job.totalScenes = count;
-  job.detail = reference
-    ? `Generando escena ${index + 1} de ${count} desde el último fotograma…`
-    : `Generando escena ${index + 1} de ${count}…`;
-  const controller = new AbortController();
-  job.controller = controller;
-  const useImage = Boolean(reference);
-  const id = await submit(useImage ? IMAGE_URL : TEXT_URL, promptFor(body.prompt, index, count, useImage), body.negative, settings, seconds, controller.signal, reference);
-  job.providerRequestId = id;
-  const media = await waitFor(id, controller.signal, job);
-  const raw = path.join(work, `raw-${index}.mp4`);
-  const clip = path.join(work, `clip-${index}.mp4`);
-  await download(media, raw);
-  if (!(await hasRealMotion(raw))) {
-    await fs.rm(raw, { force: true });
-    throw Object.assign(new Error(`El motor devolvió una escena sin movimiento real (${seconds} s).`), { code: 'STATIC_VIDEO' });
-  }
-  await normalize(raw, clip, settings.fps, seconds);
-  await fs.rm(raw, { force: true });
-  job.controller = null;
-  return clip;
-}
-
 async function run(job, body) {
-  const total = Number(body.duration);
-  const settings = cfg(body);
-  const work = await fs.mkdtemp(path.join(os.tmpdir(), 'sala-final-video-'));
+  const total = ALLOWED_DURATIONS.has(Number(body.duration)) ? Number(body.duration) : 5;
+  const cfg = settings(body);
+  const work = await fs.mkdtemp(path.join(os.tmpdir(), 'sala-wan-'));
   const clips = [];
   let audioPath = '';
   try {
     const count = Math.ceil(total / 5);
-    let reference = null;
-    for (let i = 0; i < count; i += 1) {
-      const seconds = i === count - 1 && total % 5 !== 0 ? total % 5 : 5;
-      const clip = await generateSegment(job, body, settings, work, i, count, seconds, reference);
+    let reference = '';
+    for (let index = 0; index < count; index += 1) {
+      if (job.cancelled) throw Object.assign(new Error('Generación cancelada.'), { code: 'CANCELLED' });
+      const seconds = index === count - 1 && total % 5 ? total % 5 : 5;
+      job.currentScene = index + 1;
+      job.totalScenes = count;
+      job.detail = reference ? `Generando escena ${index + 1} de ${count} con continuidad…` : `Generando escena ${index + 1} de ${count} con WAN 2.2…`;
+      const mediaUrl = await generateWanVideo({
+        prompt: promptFor(body.prompt, index, count, Boolean(reference)),
+        negative: [body.negative, NEGATIVE].filter(Boolean).join(', '),
+        aspect: cfg.aspect,
+        imagePath: reference,
+        job
+      });
+      if (job.cancelled) throw Object.assign(new Error('Generación cancelada.'), { code: 'CANCELLED' });
+      const raw = path.join(work, `raw-${index}.mp4`);
+      const clip = path.join(work, `clip-${index}.mp4`);
+      await download(mediaUrl, raw);
+      if (!(await hasRealMotion(raw))) throw new Error(`WAN 2.2 devolvió una escena sin movimiento real (escena ${index + 1}).`);
+      await normalize(raw, clip, cfg.fps, seconds);
+      await fs.rm(raw, { force: true });
       clips.push(clip);
-      if (i < count - 1) {
-        const frame = path.join(work, `frame-${i}.jpg`);
-        await lastFrame(clip, frame);
-        const publicName = `sequence-${job.id}-${i + 1}.jpg`;
-        await fs.mkdir(generatedDir, { recursive: true });
-        await fs.copyFile(frame, path.join(generatedDir, publicName));
-        reference = new URL(`/generated/${publicName}`, `${String(job.req.get('x-forwarded-proto') || job.req.protocol || 'https').split(',')[0]}://${job.req.get('host')}`).toString();
+      reference = '';
+      if (index < count - 1) {
+        reference = path.join(work, `frame-${index}.jpg`);
+        await lastFrame(clip, reference);
       }
     }
 
     await fs.mkdir(generatedDir, { recursive: true });
     const silent = path.join(work, 'silent.mp4');
-    job.detail = 'Uniendo las escenas con continuidad…';
+    job.providerState = 'ASSEMBLING';
+    job.detail = 'Uniendo las escenas y preparando el vídeo final…';
     await concat(clips, silent);
 
     const narration = String(body.audioText || '').trim().slice(0, 4000);
     const finalPath = path.join(generatedDir, `${job.id}.mp4`);
     if (narration) {
       job.providerState = 'GENERATING_AUDIO';
-      job.detail = `Generando narración en ${String(body.audioLanguage || 'en')}…`;
+      job.detail = `Generando narración en ${normalizeAudioLanguage(body.audioLanguage || 'en')}…`;
       audioPath = await generateSpeechAudio({ text: narration, language: body.audioLanguage || 'en', outputDir: audioDir });
-      await mux(silent, audioPath, finalPath, total);
+      await muxAudioIntoVideo({ videoPath: silent, audioPath, outputPath: finalPath, durationSeconds: total });
     } else {
       await fs.copyFile(silent, finalPath);
     }
 
     if (job.userId && job.transactionId) await finalizeGeneration(job.userId, job.transactionId);
     job.status = 'COMPLETED';
+    job.providerState = 'COMPLETED';
     job.outputUrl = `/generated/${job.id}.mp4`;
-    job.detail = narration ? `Vídeo de ${total} s con audio generado.` : `Vídeo de ${total} s listo.`;
+    job.detail = narration ? `Vídeo de ${total} s con narración ${normalizeAudioLanguage(body.audioLanguage || 'en')}.` : `Vídeo de ${total} s generado con WAN 2.2.`;
   } catch (error) {
+    console.error('[FINAL GENERATION]', error?.stack || error);
     if (job.userId && job.transactionId) await refundGeneration(job.userId, job.transactionId, error?.code === 'CANCELLED' ? 'generation_cancelled' : 'generation_failed');
     job.status = error?.code === 'CANCELLED' ? 'CANCELLED' : 'ERROR';
-    job.detail = `${error.message || 'No se pudo completar el vídeo.'} El crédito fue devuelto.`;
+    job.providerState = error?.code === 'CANCELLED' ? 'CANCELLED' : 'ERROR';
+    job.detail = `${error?.message || 'No se pudo completar la generación.'} El crédito fue devuelto.`;
   } finally {
-    job.controller = null;
+    cancelWanVideo(job);
     if (audioPath) await fs.rm(audioPath, { force: true }).catch(() => {});
-    await fs.rm(work, { recursive: true, force: true });
+    await fs.rm(work, { recursive: true, force: true }).catch(() => {});
   }
 }
 
-function finalSequencePost(req, res) {
-  if (!PIXAZO_API_KEY) return res.status(503).json({ error: 'PIXAZO_API_KEY no está configurada en el servidor.' });
+function createJob(req, body, forcedDuration = null) {
+  const duration = forcedDuration || (ALLOWED_DURATIONS.has(Number(body.duration)) ? Number(body.duration) : 5);
+  const id = randomUUID();
+  const job = {
+    id, status: 'QUEUED', providerState: 'QUEUED', providerEndpoint: '', providerRequestId: '',
+    createdAt: Date.now(), cancelled: false, controller: null, currentScene: 0, totalScenes: Math.ceil(duration / 5),
+    outputUrl: '', detail: 'Preparando generación…', req, userId: req.salaBillingUserId, transactionId: req.salaBillingTransactionId
+  };
+  jobs.set(id, job);
+  run(job, { ...body, duration }).catch((error) => console.error('[JOB]', error));
+  return { job, duration };
+}
+
+function generationPost(req, res) {
   const body = req.body || {};
-  const allowed = new Set([5, 10, 15, 20, 25, 30, 60]);
-  const duration = allowed.has(Number(body.duration)) ? Number(body.duration) : 10;
   if (typeof body.prompt !== 'string' || !body.prompt.trim()) return res.status(400).json({ error: 'prompt es obligatorio.' });
   if (body.prompt.trim().length > 4000) return res.status(400).json({ error: 'prompt no puede superar 4000 caracteres.' });
-  if (typeof body.audioText === 'string' && body.audioText.length > 4000) return res.status(400).json({ error: 'El texto de audio no puede superar 4000 caracteres.' });
-  const id = randomUUID();
-  const job = { id, status: 'QUEUED', detail: 'Preparando generación desde tu prompt…', createdAt: Date.now(), cancelled: false, controller: null, providerRequestId: '', providerState: '', outputUrl: '', req, userId: req.salaBillingUserId, transactionId: req.salaBillingTransactionId };
-  jobs.set(id, job);
-  run(job, { ...body, duration }).catch(() => {});
-  return res.status(202).json({ job_id: id, duration, audio: Boolean(String(body.audioText || '').trim()) });
+  if (String(body.audioText || '').length > 4000) return res.status(400).json({ error: 'El texto de audio no puede superar 4000 caracteres.' });
+  const { job, duration } = createJob(req, body, 5);
+  return res.status(202).json({ request_id: job.id, requestId: job.id, duration, provider: 'WAN 2.2 ZeroGPU', audio: Boolean(String(body.audioText || '').trim()) });
 }
 
-function finalGenerationPost(req, res) {
+function sequencePost(req, res) {
   const body = req.body || {};
-  if (!PIXAZO_API_KEY) return res.status(503).json({ error: 'PIXAZO_API_KEY no está configurada en el servidor.' });
   if (typeof body.prompt !== 'string' || !body.prompt.trim()) return res.status(400).json({ error: 'prompt es obligatorio.' });
-  const id = randomUUID();
-  const job = { id, status: 'QUEUED', detail: 'Preparando generación desde tu prompt…', createdAt: Date.now(), cancelled: false, controller: null, providerRequestId: '', providerState: '', outputUrl: '', req, userId: req.salaBillingUserId, transactionId: req.salaBillingTransactionId };
-  jobs.set(id, job);
-  run(job, { ...body, duration: 5 }).catch(() => {});
-  return res.status(202).json({ request_id: id, duration: 5 });
+  if (body.prompt.trim().length > 4000) return res.status(400).json({ error: 'prompt no puede superar 4000 caracteres.' });
+  if (String(body.audioText || '').length > 4000) return res.status(400).json({ error: 'El texto de audio no puede superar 4000 caracteres.' });
+  const duration = ALLOWED_DURATIONS.has(Number(body.duration)) ? Number(body.duration) : 10;
+  const { job } = createJob(req, body, duration);
+  return res.status(202).json({ job_id: job.id, duration, provider: 'WAN 2.2 ZeroGPU', audio: Boolean(String(body.audioText || '').trim()) });
 }
 
-function finalSequenceStatus(req, res) {
-  const job = jobs.get(String(req.params.jobId || ''));
-  if (!job) return res.status(404).json({ error: 'No se encontró la generación.' });
-  return res.json({ ...job, req: undefined, controller: undefined, userId: undefined, transactionId: undefined });
-}
-
-function finalGenerationStatus(req, res) {
+function generationStatus(req, res) {
   const job = jobs.get(String(req.params.requestId || ''));
   if (!job) return res.status(404).json({ error: 'No se encontró la generación.' });
-  if (job.status === 'COMPLETED' && job.outputUrl) return res.json({ status: 'COMPLETED', output: { media_url: [job.outputUrl] } });
-  return res.json({ status: job.status, state: job.providerState || job.status, detail: job.detail || '' });
+  return res.json({ id: job.id, status: job.status, providerState: job.providerState, detail: job.detail, outputUrl: job.outputUrl, currentScene: job.currentScene, totalScenes: job.totalScenes });
 }
 
-async function finalSequenceCancel(req, res) {
+function sequenceStatus(req, res) {
   const job = jobs.get(String(req.params.jobId || ''));
+  if (!job) return res.status(404).json({ error: 'No se encontró la producción.' });
+  return res.json({ id: job.id, status: job.status, providerState: job.providerState, detail: job.detail, outputUrl: job.outputUrl, currentScene: job.currentScene, totalScenes: job.totalScenes });
+}
+
+async function cancelGeneration(req, res) {
+  const job = jobs.get(String(req.params.requestId || ''));
   if (!job) return res.status(404).json({ error: 'No se encontró la generación.' });
-  job.cancelled = true;
-  if (job.controller) job.controller.abort();
-  let refunded = false;
-  if (job.userId && job.transactionId) {
-    const result = await refundGeneration(job.userId, job.transactionId, 'generation_cancelled');
-    refunded = Boolean(result?.refunded || result?.reason === 'already_finalized_or_missing');
+  if (!['COMPLETED', 'ERROR', 'CANCELLED'].includes(job.status)) {
+    job.cancelled = true;
+    job.status = 'CANCELLED';
+    cancelWanVideo(job);
+    if (job.userId && job.transactionId) await refundGeneration(job.userId, job.transactionId, 'generation_cancelled');
   }
-  return res.json({ ok: true, status: 'CANCELLED', job_id: job.id, creditRefunded: refunded });
-}
-
-async function finalGenerationCancel(req, res) {
-  const job = jobs.get(String(req.params.requestId || ''));
-  if (!job) return res.status(404).json({ error: 'No se encontró la generación.' });
-  job.cancelled = true;
-  if (job.controller) job.controller.abort();
-  if (job.userId && job.transactionId) await refundGeneration(job.userId, job.transactionId, 'generation_cancelled');
   return res.json({ ok: true, status: 'CANCELLED', creditRefunded: true });
 }
 
+function sequenceCancel(req, res) {
+  return cancelGeneration({ ...req, params: { requestId: req.params.jobId } }, res);
+}
+
 express.application.post = function finalPost(route, ...handlers) {
-  if (route === '/api/video/sequence' || route === '/api/video/generate') {
-    if (handlers.length >= 2) handlers[handlers.length - 1] = route === '/api/video/sequence' ? finalSequencePost : finalGenerationPost;
-    return nativePost.call(this, route, ...handlers);
-  }
-  if (route === '/api/video/sequence/:jobId/cancel') return nativePost.call(this, route, finalSequenceCancel);
-  if (route === '/api/video/cancel/:requestId') return nativePost.call(this, route, finalGenerationCancel);
+  if (route === '/api/video/generate') return nativePost.call(this, route, ...handlers.slice(0, -1), generationPost);
+  if (route === '/api/video/sequence') return nativePost.call(this, route, ...handlers.slice(0, -1), sequencePost);
+  if (route === '/api/video/cancel/:requestId') return nativePost.call(this, route, cancelGeneration);
+  if (route === '/api/video/sequence/:jobId/cancel') return nativePost.call(this, route, sequenceCancel);
   return nativePost.call(this, route, ...handlers);
 };
 
 express.application.get = function finalGet(route, ...handlers) {
-  if (route === '/api/video/sequence/:jobId') return nativeGet.call(this, route, finalSequenceStatus);
-  if (route === '/api/video/status/:requestId') return nativeGet.call(this, route, finalGenerationStatus);
+  if (route === '/api/video/status/:requestId') return nativeGet.call(this, route, generationStatus);
+  if (route === '/api/video/sequence/:jobId') return nativeGet.call(this, route, sequenceStatus);
+  if (route === '/api/health') {
+    return nativeGet.call(this, route, async (_req, res) => {
+      const database = await checkDatabase();
+      return res.status(200).json({
+        ok: true,
+        service: 'sala-de-proyeccion-api',
+        provider: 'WAN 2.2 5B · Hugging Face ZeroGPU',
+        generationReady: true,
+        videoEngine: 'WAN 2.2',
+        audioEngine: 'Edge TTS + Google fallback',
+        billingPersistence: database.connected,
+        billingDatabase: database.connected ? 'connected' : (database.configured ? 'error' : 'missing'),
+        billingDatabaseError: database.connected ? null : database.error,
+        sequenceAssembly: Boolean(ffmpegPath),
+        generationTimeoutSeconds: TIMEOUT_MS / 1000
+      });
+    });
+  }
   return nativeGet.call(this, route, ...handlers);
 };
