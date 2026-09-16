@@ -6,17 +6,19 @@ services:
     startCommand: npm start
     healthCheckPath: /api/health
     envVars:
-      - key: PIXAZO_API_KEY
-        sync: false
-      - key: PIXAZO_VIDEO_URL
-        value: https://gateway.pixazo.ai/ltx-video/v1/text-to-video
       - key: VIDEO_PROVIDER
-        value: pixazo-ltx-free
-      - key: IMAGE_VIDEO_ENGINE
-        value: freeai
-      - key: FREEAI_TALKING_HEAD_ENDPOINT
-        value: https://api.free.ai/v1/video/talking-head/
-      - key: FREEAI_API_KEY
+        value: wan2.2-free
+      - key: WAN_SPACE_ID
+        value: Upsampler/wan-2-2-5b-video
+      - key: WAN_MODEL
+        value: Wan2.2
+      - key: WAN_STEPS
+        value: "20"
+      - key: WAN_GUIDE_SCALE
+        value: "5"
+      - key: WAN_FRAMES
+        value: "49"
+      - key: HF_TOKEN
         sync: false
       - key: DATABASE_URL
         sync: false
