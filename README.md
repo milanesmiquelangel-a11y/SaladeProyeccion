@@ -1,36 +1,53 @@
 # Sala de Proyección
 
-**International AI video studio for preparing, generating and organizing short AI video productions.**
+**International AI video studio for creating, organizing and finishing short AI video productions.**
 
-## Product overview
+## Current generation architecture
 
-Sala de Proyección is a web application that turns a user's scene description into an AI-generated video, with optional multilingual narration, project organization, credit accounting and administrator controls.
+The production path is now intentionally simple:
 
-The current launch strategy is **Phase 1: Prompt → Video**. Image-to-video is intentionally deferred until a dedicated production-ready engine is selected and validated.
+```text
+User prompt
+   ↓
+WAN 2.2 5B on a Hugging Face ZeroGPU Space
+   ↓
+FFmpeg normalization / multi-segment assembly
+   ↓
+Optional multilingual Edge TTS narration
+   ↓
+Final MP4
+```
+
+The application does **not** use Pixazo/LTX for the main generation path. Legacy provider patches were removed from the application entrypoint.
 
 ## Current capabilities
 
-- Responsive video-production interface.
-- Prompt-to-video generation.
-- Configurable 16:9, 9:16 and 1:1 formats.
-- Configurable video duration.
-- Standard/high quality options and 24/30 FPS.
+- Prompt-to-video with WAN 2.2 5B.
+- Text-to-video and image-to-video through the same WAN provider adapter.
+- Automatic Gradio API discovery instead of hard-coded endpoint positions.
+- Fallback between compatible public WAN 2.2 Spaces when the primary Space is unavailable.
+- 16:9, 9:16 and 1:1 output formats.
+- 5–30 second UI durations, assembled from short WAN clips when necessary.
 - Optional multilingual narration.
-- FFmpeg video normalization and assembly.
-- Project drafts and local history.
-- Prompt templates.
-- PostgreSQL-backed credit accounting.
-- Credit reservation, finalization and refund on failed/cancelled generation.
-- Stripe Checkout/webhook integration points.
-- Administrator configuration.
-- Render deployment configuration.
-- Health endpoint for deployment verification.
+- Edge TTS first, with Google TTS as a fallback.
+- English, Spanish, Russian and Kazakh voices plus additional supported languages.
+- FFmpeg normalization, continuity assembly and audio muxing.
+- Project drafts and browser-local history.
+- PostgreSQL-backed credit accounting with reservation/finalization/refund handling.
+- Administrator controls and Render deployment configuration.
+- `/api/health` deployment health endpoint.
 
-## Commercial architecture
+## Important provider note
 
-The application keeps provider credentials on the server. The video-generation layer is configurable through environment variables so the owner can replace the underlying provider/model without redesigning the product interface.
+The current free video engine depends on the availability and quotas of public Hugging Face Spaces. The selected primary Space is `Upsampler/wan-2-2-5b-video`; the backend can fall back to another compatible WAN 2.2 Space. This is a free/community compute path, not a guaranteed unlimited commercial API.
 
-Billing is credit-based. Current configured plans are Creator and Pro; production payment activation requires the operator's own Stripe credentials and Price IDs.
+The application keeps provider credentials on the server. An optional `HF_TOKEN` can be supplied when a Space requires authentication or benefits from authenticated access.
+
+## Audio
+
+Narration is generated server-side and is inserted into the final MP4 before the job is marked `COMPLETED`. This is important: a successful video job with requested narration is not considered complete until the audio stream has been verified in the resulting MP4.
+
+The default interface language is English, while voice generation is dynamically selectable and is not limited to the four primary project languages.
 
 ## Deployment
 
@@ -49,30 +66,18 @@ Health endpoint:
 GET /api/health
 ```
 
-Required production configuration includes a PostgreSQL `DATABASE_URL`, video-provider credentials, and (when payments are enabled) Stripe secret/webhook/Price ID values.
+Production configuration should include PostgreSQL `DATABASE_URL` and the normal authentication/payment settings used by the application. `HF_TOKEN` is optional for the public WAN Spaces.
 
-## Buyer handoff
+## Validation
 
-A commercial handoff should use fresh credentials owned by the buyer. Third-party API accounts, domains, payment accounts and paid provider credits are not included unless explicitly agreed in writing.
+GitHub Actions runs:
 
-See:
+```text
+npm install
+npm run check
+```
 
-- `docs/PRODUCT_STATUS.md` — product readiness and known limitations.
-- `docs/BUYER_HANDOFF.md` — technical handoff information.
-- `docs/SALES_LISTING.md` — commercial sales draft and asking-price strategy.
-- `public/acquisition.html` — buyer-facing acquisition landing page.
-
-## Acquisition
-
-The application is currently prepared for a potential acquisition rather than requiring an immediate paid launch. The buyer-facing page presents the product, included assets, architecture, limitations and current asking price.
-
-**Asking price: USD 7,500 — negotiable.**
-
-## Important engine policy
-
-Wan 2.1 and Wan 2.2 are not used. Hugging Face ZeroGPU is not required for the prompt-to-video path.
-
-The repository does not guarantee semantic perfection from the AI video model. The configured model remains responsible for the final visual interpretation.
+The check validates the active Node entrypoint, WAN provider, final generation pipeline and audio engine syntax.
 
 ## Security
 
