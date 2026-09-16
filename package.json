@@ -1,17 +1,18 @@
 {
   "name": "sala-de-proyeccion",
-  "version": "0.5.1",
+  "version": "0.6.0",
   "private": true,
-  "description": "Backend Node/Express para Sala de Proyección con generación y montaje de vídeo IA.",
+  "description": "Backend Node/Express para Sala de Proyección con generación WAN 2.2, narración multilingüe y montaje FFmpeg.",
   "type": "module",
   "main": "src/wan-mode-entry.js",
   "scripts": {
     "start": "node src/wan-mode-entry.js",
     "dev": "node --watch src/wan-mode-entry.js",
+    "check": "node --check src/wan-mode-entry.js && node --check src/final-generation-bootstrap.js && node --check src/wan-video-provider.js && node --check src/audio-tts.js",
     "paypal:setup": "node scripts/paypal-setup.mjs"
   },
   "engines": {
-    "node": ">=18"
+    "node": ">=18.17"
   },
   "dependencies": {
     "@gradio/client": "^2.5.1",
@@ -20,6 +21,7 @@
     "dotenv": "^16.4.7",
     "express": "^4.21.2",
     "ffmpeg-static": "^5.2.0",
+    "node-edge-tts": "^1.2.10",
     "pg": "^8.16.3"
   }
 }
