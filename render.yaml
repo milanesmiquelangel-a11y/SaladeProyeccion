@@ -18,6 +18,8 @@ services:
         value: "5"
       - key: WAN_FRAMES
         value: "49"
+      - key: WAN_CONNECT_TIMEOUT_MS
+        value: "45000"
       - key: HF_TOKEN
         sync: false
       - key: DATABASE_URL
