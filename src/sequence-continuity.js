@@ -6,6 +6,7 @@ import { promisify } from 'node:util';
 import { randomUUID } from 'node:crypto';
 import ffmpegPath from 'ffmpeg-static';
 import { finalizeGeneration, refundGeneration } from './billing-ledger.js';
+import { cancelWanProviderJob } from './wan-provider-bridge.js';
 
 const execFileAsync = promisify(execFile);
 const PIXAZO_API_KEY = process.env.PIXAZO_API_KEY;
@@ -16,7 +17,6 @@ const jobs = new Map();
 const TIMEOUT = 20 * 60 * 1000;
 const publicDir = path.join(process.cwd(), 'public');
 const generatedDir = path.join(publicDir, 'generated');
-
 const NEGATIVE = 'deformed subject, melted subject, duplicate subject, extra limbs, missing limbs, distorted face, distorted hands, duplicate people, merged bodies, floating objects, impossible physics, warped background, unreadable text, cartoon, CGI';
 
 function config(body = {}) {
@@ -176,10 +176,13 @@ export async function sequenceCancelHandler(req, res) {
   if (!job) return res.status(404).json({ error: 'No se encontró la generación.' });
   job.cancelled = true;
   if (job.controller) job.controller.abort();
+  if (job.providerRequestId) cancelWanProviderJob(job.providerRequestId);
   let refunded = false;
   if (job.userId && job.transactionId) {
     const result = await refundGeneration(job.userId, job.transactionId, 'generation_cancelled');
     refunded = Boolean(result?.refunded || result?.reason === 'already_finalized_or_missing');
   }
+  job.status = 'CANCELLED';
+  job.detail = refunded ? 'Generación detenida. El crédito fue devuelto.' : 'Generación detenida.';
   return res.json({ ok: true, status: 'CANCELLED', job_id: job.id, creditRefunded: refunded });
 }
