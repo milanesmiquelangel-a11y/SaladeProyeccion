@@ -32,8 +32,24 @@
     const url = typeof input === 'string' ? input : input?.url || '';
     const sameOrigin = url.startsWith('/') || url.startsWith(window.location.origin);
     if (!sameOrigin) return nativeFetch(input, init);
-    // Authentication requests must work before a session exists; never wait for salaAuthReady here.
     if (url.includes('/api/auth/')) return nativeFetch(input, { ...init, credentials:'same-origin' });
+
+    // Always copy the visible narration fields into the generation payload here,
+    // at the last client layer before the native network request. This avoids
+    // losing audioText when another frontend wrapper rebuilds the JSON body.
+    if (url.includes('/api/video/generate') || url.includes('/api/video/sequence')) {
+      try {
+        const body = JSON.parse(init.body || '{}');
+        const audioText = String(document.querySelector('#audioText')?.value || '').trim();
+        const audioLanguage = String(document.querySelector('#audioLanguage')?.value || 'en').trim() || 'en';
+        if (audioText) {
+          body.audioText = audioText.slice(0, 4000);
+          body.audioLanguage = audioLanguage;
+          init = { ...init, body: JSON.stringify(body) };
+        }
+      } catch {}
+    }
+
     await waitForAuth();
     const cost = generationCost(input, init);
     const preflightResponse = await preflightGeneration(input, init, cost);
