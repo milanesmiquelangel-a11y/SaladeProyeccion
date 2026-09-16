@@ -7,9 +7,11 @@ const configuredSpace = String(process.env.WAN_SPACE_ID || '').trim();
 const configuredEndpoint = String(process.env.WAN_ENDPOINT || '').trim();
 const HF_TOKEN = String(process.env.HF_TOKEN || '').trim() || undefined;
 
+// Verified 2026-09-16: these public Spaces are the intended free WAN 2.2 fallbacks.
+// Wan-AI/Wan-2.2-5B is retained last as a recovery option if its owner resumes it.
 const DEFAULT_SPACES = [
   'Upsampler/wan-2-2-5b-video',
-  'pragya2-7/wan-2-2-5b-video',
+  'ginigen/Wan-2.2-Enhanced',
   'Wan-AI/Wan-2.2-5B'
 ];
 const FALLBACK_SPACES = [configuredSpace, ...DEFAULT_SPACES]
@@ -17,6 +19,25 @@ const FALLBACK_SPACES = [configuredSpace, ...DEFAULT_SPACES]
   .filter((space, index, list) => list.indexOf(space) === index && !/wan2\.1/i.test(space));
 
 const clientPromises = new Map();
+const CONNECT_TIMEOUT_MS = Number(process.env.WAN_CONNECT_TIMEOUT_MS || 45000);
+
+function withTimeout(promise, ms, label) {
+  let timer;
+  const timeout = new Promise((_, reject) => {
+    timer = setTimeout(() => reject(Object.assign(new Error(`${label} tardó demasiado (>${Math.round(ms / 1000)}s).`), { code: 'TIMEOUT' })), ms);
+  });
+  return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
+}
+
+function isQuotaError(error) {
+  const text = `${error?.message || error}`.toLowerCase();
+  return text.includes('quota') || text.includes('gpu task aborted') || text.includes('exceeded') || text.includes('too many requests') || text.includes('429');
+}
+
+function isSleepingOrPausedError(error) {
+  const text = `${error?.message || error}`.toLowerCase();
+  return text.includes('paused') || text.includes('sleeping') || text.includes('runtime error') || text.includes('building') || text.includes('not running') || text.includes('could not connect');
+}
 
 function spaceOrigin(space) {
   const [owner, name] = String(space).split('/');
@@ -129,7 +150,8 @@ function buildInputs(endpointInfo, { prompt, negative, aspect, imagePath }) {
   const params = Array.isArray(endpointInfo?.parameters) ? endpointInfo.parameters : [];
   const { width, height } = dimensions(aspect);
   const frames = Number(process.env.WAN_FRAMES || 49);
-  const steps = Number(process.env.WAN_STEPS || 20);
+  const requestedSteps = Number(process.env.WAN_STEPS || 8);
+  const steps = Number.isFinite(requestedSteps) ? Math.min(8, Math.max(1, Math.trunc(requestedSteps))) : 8;
   const guidance = Number(process.env.WAN_GUIDE_SCALE || 5);
   const values = [];
 
@@ -165,6 +187,7 @@ function buildInputs(endpointInfo, { prompt, negative, aspect, imagePath }) {
 
 export async function generateWanVideo({ prompt, negative = '', aspect = '16:9', imagePath = '', job }) {
   const errors = [];
+  let anyQuotaError = false;
   for (const space of FALLBACK_SPACES) {
     try {
       if (job) {
@@ -172,8 +195,8 @@ export async function generateWanVideo({ prompt, negative = '', aspect = '16:9',
         job.providerEndpoint = space;
         job.detail = `Conectando con WAN 2.2 (${space})…`;
       }
-      const app = await getClient(space);
-      const api = await app.view_api();
+      const app = await withTimeout(getClient(space), CONNECT_TIMEOUT_MS, `Conexión con ${space}`);
+      const api = await withTimeout(app.view_api(), CONNECT_TIMEOUT_MS, `Lectura de API de ${space}`);
       const [endpoint, endpointInfo] = chooseEndpoint(api, space, Boolean(imagePath));
       const inputs = buildInputs(endpointInfo, { prompt, negative, aspect, imagePath });
       if (job) {
@@ -190,12 +213,23 @@ export async function generateWanVideo({ prompt, negative = '', aspect = '16:9',
       }
       return reference;
     } catch (error) {
+      clientPromises.delete(space);
+      if (isQuotaError(error)) anyQuotaError = true;
       errors.push(`${space}: ${error?.message || error}`);
       console.error(`[WAN 2.2] ${space} falló:`, error?.stack || error?.message || error);
-      if (job) job.detail = `WAN 2.2 (${space}) no disponible; probando otro backend gratuito…`;
+      if (job) {
+        job.detail = isSleepingOrPausedError(error)
+          ? `WAN 2.2 (${space}) está pausado o iniciándose; probando otro backend gratuito…`
+          : isQuotaError(error)
+            ? `WAN 2.2 (${space}) alcanzó el límite gratuito de GPU; probando otro backend gratuito…`
+            : `WAN 2.2 (${space}) no disponible; probando otro backend gratuito…`;
+      }
     }
   }
-  throw new Error(`No fue posible generar el vídeo con WAN 2.2. ${errors.join(' | ')}`);
+  const summary = anyQuotaError
+    ? 'Todos los backends gratuitos de WAN 2.2 alcanzaron su cuota gratuita de GPU (ZeroGPU) en este momento. Este es un límite del proveedor gratuito, no un error del servidor: vuelve a intentarlo en unos minutos, o añade un token de Hugging Face (HF_TOKEN) para obtener más cuota.'
+    : 'No fue posible generar el vídeo con ninguno de los backends gratuitos de WAN 2.2 configurados.';
+  throw new Error(`${summary} Detalle: ${errors.join(' | ')}`);
 }
 
 export function cancelWanVideo(job) {
