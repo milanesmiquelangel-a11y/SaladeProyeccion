@@ -1,14 +1,17 @@
 import { Client } from '@gradio/client';
 
-// Keep WAN 2.1 T2V 1.3B as the primary backend. If the public ZeroGPU
-// Space cannot expose its Gradio API, fall back to another public Space that
-// contains the same 1.3B model instead of failing the whole generation.
+// WAN 2.2 is now the video engine. Prefer the public, fast 5B text/image-to-video
+// Space and fall back to public WAN 2.2 Spaces if the first one is unavailable.
 const configuredSpace = String(process.env.WAN_SPACE_ID || '').trim();
-const PRIMARY_SPACE = configuredSpace && configuredSpace !== 'fffiloni/Wan2.1'
+const isOldWan21 = /wan2\.1/i.test(configuredSpace);
+const PRIMARY_SPACE = configuredSpace && !isOldWan21
   ? configuredSpace
-  : '0AstroKnight0/wan2.1-t2v-1.3b-demo';
-const FALLBACK_SPACES = [PRIMARY_SPACE, 'mr2along/Wan-2.1-T2V-1.3B-GPU']
-  .filter((space, index, list) => space && list.indexOf(space) === index);
+  : 'Upsampler/wan-2-2-5b-video';
+const FALLBACK_SPACES = [
+  PRIMARY_SPACE,
+  'Upsampler/wan-2-2-14b-text-to-video',
+  'icehooo5/wan2-video-generation'
+].filter((space, index, list) => space && list.indexOf(space) === index);
 
 const CONFIGURED_ENDPOINT = String(process.env.WAN_ENDPOINT || '').trim();
 const HF_TOKEN = process.env.HF_TOKEN || undefined;
@@ -28,7 +31,7 @@ async function getClient(space) {
     clientPromises.set(space, Client.connect(origin, {
       ...(HF_TOKEN ? { token: HF_TOKEN } : {}),
       events: ['status', 'data'],
-      space_status: (status) => console.log('[WAN]', space, status?.status || 'unknown', status?.message || '')
+      space_status: (status) => console.log('[WAN 2.2]', space, status?.status || 'unknown', status?.message || '')
     }).catch(error => {
       clientPromises.delete(space);
       throw error;
@@ -83,7 +86,7 @@ function parameterChoices(parameter) {
 }
 
 function preferredModelValue(parameter) {
-  const desired = String(process.env.WAN_MODEL || 'Wan2.1-T2V-1.3B').toLowerCase();
+  const desired = String(process.env.WAN_MODEL || 'Wan2.2').toLowerCase();
   const choices = parameterChoices(parameter);
   if (!Array.isArray(choices)) return null;
   const match = choices.find(choice => {
@@ -100,8 +103,8 @@ function buildInputs(endpointInfo, prompt, negative, aspect) {
   const height = portrait ? 832 : square ? 624 : 480;
   const width = portrait ? 480 : square ? 624 : 832;
   const defaultSteps = Number(process.env.WAN_STEPS || 4);
-  const defaultGuidance = Number(process.env.WAN_GUIDE_SCALE || 1);
-  const defaultFrames = Number(process.env.WAN_FRAMES || 81);
+  const defaultGuidance = Number(process.env.WAN_GUIDE_SCALE || 5);
+  const defaultFrames = Number(process.env.WAN_FRAMES || 73);
   const values = [];
 
   for (const parameter of parameters) {
@@ -118,9 +121,9 @@ function buildInputs(endpointInfo, prompt, negative, aspect) {
     else if (name === 'fps' || name.includes('frame_rate')) value = 16;
     else if (name.includes('seed')) value = -1;
     else if (name === 'model' || name.includes('model_choice') || name.includes('model_id')) {
-      value = preferredModelValue(parameter) ?? (hasDefault(parameter) ? parameter.parameter_default : 'Wan2.1-T2V-1.3B');
+      value = preferredModelValue(parameter) ?? (hasDefault(parameter) ? parameter.parameter_default : null);
     } else if (name.includes('image') || name.includes('input_video') || name.includes('video')) {
-      if (!hasDefault(parameter)) throw new Error(`El endpoint WAN seleccionado requiere un archivo (${parameter.label || name}) y no es compatible con texto a vídeo.`);
+      if (!hasDefault(parameter)) throw new Error(`El endpoint WAN 2.2 seleccionado requiere un archivo (${parameter.label || name}) y no es compatible con texto a vídeo.`);
       value = parameter.parameter_default;
     } else if (hasDefault(parameter)) value = parameter.parameter_default;
     else if (parameter?.type === 'boolean' || parameter?.component === 'Checkbox') value = false;
@@ -144,20 +147,23 @@ function chooseEndpoint(api, space) {
       const names = info.parameters.map(parameterName);
       const hasPrompt = names.some(value => value === 'prompt' || value.includes('prompt'));
       const hasImage = names.some(value => value.includes('image') || value.includes('input_video'));
-      const hasVideoReturn = (info.returns || []).some(item => `${item?.label || ''} ${item?.component || ''}`.toLowerCase().includes('video') || `${item?.label || ''} ${item?.component || ''}`.toLowerCase().includes('file'));
+      const hasVideoReturn = (info.returns || []).some(item => {
+        const text = `${item?.label || ''} ${item?.component || ''}`.toLowerCase();
+        return text.includes('video') || text.includes('file');
+      });
       let score = 0;
       if (hasPrompt) score += 10;
       if (hasVideoReturn) score += 5;
       if (!hasImage) score += 5;
-      if (name === '/generate_video') score += 10;
-      if (name === '/t2v_generation') score += 9;
+      if (name.includes('generate')) score += 8;
+      if (name.includes('t2v')) score += 8;
       if (name === '/predict') score += 1;
       return { name, info, score, hasPrompt, hasImage };
     })
     .filter(item => item.hasPrompt && !item.hasImage)
     .sort((a, b) => b.score - a.score);
 
-  if (!ranked.length) throw new Error(`El Space ${space} no expone un endpoint WAN 2.1 de texto a vídeo compatible. Endpoints: ${Object.keys(named).join(', ') || 'ninguno'}.`);
+  if (!ranked.length) throw new Error(`El Space ${space} no expone un endpoint WAN 2.2 de texto a vídeo compatible. Endpoints: ${Object.keys(named).join(', ') || 'ninguno'}.`);
   return [ranked[0].name, ranked[0].info];
 }
 
@@ -165,14 +171,14 @@ export async function generateWanVideo({ prompt, negative, aspect = '16:9', job 
   let lastError = null;
   for (const space of FALLBACK_SPACES) {
     try {
-      job.detail = `Conectando con WAN 2.1 (${space})…`;
+      job.detail = `Conectando con WAN 2.2 (${space})…`;
       const app = await getClient(space);
       const api = await app.view_api();
       const [endpoint, endpointInfo] = chooseEndpoint(api, space);
       const inputs = buildInputs(endpointInfo, prompt, negative, aspect);
       job.providerState = 'PROCESSING';
       job.providerEndpoint = `${space}${endpoint}`;
-      job.detail = `WAN 2.1 conectado (${space}, ${endpoint}). Generando el vídeo…`;
+      job.detail = `WAN 2.2 conectado (${space}, ${endpoint}). Generando el vídeo…`;
 
       const result = await app.predict(endpoint, inputs);
       job.gradioJob = null;
@@ -180,17 +186,17 @@ export async function generateWanVideo({ prompt, negative, aspect = '16:9', job 
       if (!reference) throw new Error(`La respuesta no contiene un vídeo: ${JSON.stringify(result).slice(0, 1200)}`);
       if (/^https?:\/\//i.test(reference)) {
         job.providerState = 'COMPLETED';
-        job.detail = `WAN 2.1 terminó (${space}); vídeo preparado para FFmpeg…`;
+        job.detail = `WAN 2.2 terminó (${space}); vídeo preparado para FFmpeg…`;
         return reference;
       }
-      throw new Error(`WAN 2.1 devolvió una ruta local no accesible desde Render: ${reference}`);
+      throw new Error(`WAN 2.2 devolvió una ruta local no accesible desde Render: ${reference}`);
     } catch (error) {
       lastError = error;
-      console.error(`[WAN] ${space} falló:`, error?.stack || error?.message || error);
-      job.detail = `WAN 2.1 (${space}) no disponible; probando respaldo…`;
+      console.error(`[WAN 2.2] ${space} falló:`, error?.stack || error?.message || error);
+      job.detail = `WAN 2.2 (${space}) no disponible; probando respaldo…`;
     }
   }
-  throw new Error(`WAN 2.1 no pudo conectarse a ningún backend público. Último error: ${lastError?.message || lastError || 'desconocido'}`);
+  throw new Error(`WAN 2.2 no pudo conectarse a ningún backend público. Último error: ${lastError?.message || lastError || 'desconocido'}`);
 }
 
 export function cancelWanVideo(job) {
