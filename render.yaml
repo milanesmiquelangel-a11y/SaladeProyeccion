@@ -13,7 +13,7 @@ services:
       - key: WAN_MODEL
         value: Wan2.2
       - key: WAN_STEPS
-        value: "20"
+        value: "8"
       - key: WAN_GUIDE_SCALE
         value: "5"
       - key: WAN_FRAMES
