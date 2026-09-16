@@ -9,16 +9,23 @@
 
     if (panelTitle) panelTitle.textContent = '🔊 Dialogue / character voice';
     if (textLabel) textLabel.textContent = 'Dialogue or spoken text';
-    if (textInput) textInput.placeholder = 'Example: Hello! Look at that fish!';
+    textInput.placeholder = 'Example: Hello! Look at that fish!';
 
     if (!document.querySelector('#audioMode')) {
       const wrapper = document.createElement('div');
       wrapper.innerHTML = '<label for="audioMode">Audio type</label><select id="audioMode"><option value="dialogue" selected>Character dialogue (on-camera)</option><option value="narration">Narration / voice-over</option></select>';
-      languageLabel?.parentElement?.parentElement?.insertBefore(wrapper.firstElementChild, languageLabel.parentElement);
+      const field = wrapper.firstElementChild;
+      const select = wrapper.lastElementChild;
+      const row = languageLabel?.parentElement?.parentElement;
+      if (row && field && select) {
+        const modeBox = document.createElement('div');
+        modeBox.append(field, select);
+        row.insertBefore(modeBox, languageLabel.parentElement);
+      }
     }
 
     const hint = document.querySelector('.audio-panel .hint');
-    if (hint) hint.textContent = 'Dialogue mode asks WAN 2.2 to keep the speaker visible and speaking on camera. The current TTS track is synchronized to the video timeline; exact lip-sync is handled separately.';
+    if (hint) hint.textContent = 'Dialogue mode asks WAN 2.2 to keep the speaker visible and speaking on camera. The current TTS track follows the video timeline; exact lip-sync is a separate processing step.';
 
     const originalFetch = window.fetch.bind(window);
     window.fetch = async (input, init = {}) => {
