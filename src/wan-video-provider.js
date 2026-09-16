@@ -43,9 +43,7 @@ async function getClient(space) {
 function asRemoteUrl(value, space) {
   if (typeof value !== 'string' || !value) return '';
   if (/^https?:\/\//i.test(value)) return value;
-  if (value.startsWith('/file=') || value.startsWith('/gradio_api/file=')) {
-    return `${spaceOrigin(space)}${value}`;
-  }
+  if (value.startsWith('/file=') || value.startsWith('/gradio_api/file=')) return `${spaceOrigin(space)}${value}`;
   return '';
 }
 
@@ -146,7 +144,11 @@ function chooseEndpoint(api, space) {
     .map(([name, info]) => {
       const names = info.parameters.map(parameterName);
       const hasPrompt = names.some(value => value === 'prompt' || value.includes('prompt'));
-      const hasImage = names.some(value => value.includes('image') || value.includes('input_video'));
+      const imageParameters = info.parameters.filter(parameter => {
+        const value = parameterName(parameter);
+        return value.includes('image') || value.includes('input_video');
+      });
+      const hasRequiredImage = imageParameters.some(parameter => !hasDefault(parameter));
       const hasVideoReturn = (info.returns || []).some(item => {
         const text = `${item?.label || ''} ${item?.component || ''}`.toLowerCase();
         return text.includes('video') || text.includes('file');
@@ -154,13 +156,14 @@ function chooseEndpoint(api, space) {
       let score = 0;
       if (hasPrompt) score += 10;
       if (hasVideoReturn) score += 5;
-      if (!hasImage) score += 5;
+      if (!imageParameters.length) score += 5;
+      if (imageParameters.length && !hasRequiredImage) score += 3;
       if (name.includes('generate')) score += 8;
       if (name.includes('t2v')) score += 8;
       if (name === '/predict') score += 1;
-      return { name, info, score, hasPrompt, hasImage };
+      return { name, info, score, hasPrompt, hasRequiredImage };
     })
-    .filter(item => item.hasPrompt && !item.hasImage)
+    .filter(item => item.hasPrompt && !item.hasRequiredImage)
     .sort((a, b) => b.score - a.score);
 
   if (!ranked.length) throw new Error(`El Space ${space} no expone un endpoint WAN 2.2 de texto a vídeo compatible. Endpoints: ${Object.keys(named).join(', ') || 'ninguno'}.`);
