@@ -20,7 +20,11 @@ let clientPromise;
 function spaceOrigin(space) {
   const [owner, name] = String(space).split('/');
   if (!owner || !name) return '';
-  return `https://${owner.toLowerCase()}-${name.toLowerCase().replace(/_/g, '-')}.hf.space`;
+  // Hugging Face Space hostnames normalize punctuation in the repo name to
+  // hyphens. This is important for IDs such as wan2.1-t2v-1.3b-demo.
+  const normalizedOwner = owner.toLowerCase().replace(/[^a-z0-9-]/g, '-');
+  const normalizedName = name.toLowerCase().replace(/[^a-z0-9-]/g, '-').replace(/-+/g, '-');
+  return `https://${normalizedOwner}-${normalizedName}.hf.space`;
 }
 
 const SPACE_ORIGIN = spaceOrigin(SPACE);
@@ -163,18 +167,6 @@ function chooseEndpoint(api) {
   return [ranked[0].name, ranked[0].info];
 }
 
-async function publishLocalVideo(reference) {
-  const resolved = path.isAbsolute(reference) ? reference : path.resolve(process.cwd(), reference);
-  const stat = await fs.stat(resolved);
-  if (!stat.isFile()) throw new Error('La salida WAN no es un archivo.');
-  await fs.mkdir(generatedDir, { recursive: true });
-  const name = `wan-${randomUUID()}.mp4`;
-  const destination = path.join(generatedDir, name);
-  await fs.copyFile(resolved, destination);
-  const port = Number(process.env.PORT || 3000);
-  return `http://127.0.0.1:${port}/generated/${name}`;
-}
-
 export async function generateWanVideo({ prompt, negative, aspect = '16:9', job }) {
   const app = await getClient();
   const api = await app.view_api();
@@ -205,10 +197,7 @@ export async function generateWanVideo({ prompt, negative, aspect = '16:9', job 
     return reference;
   }
 
-  const published = await publishLocalVideo(reference);
-  job.providerState = 'COMPLETED';
-  job.detail = 'WAN 2.1 terminó; vídeo preparado para FFmpeg…';
-  return published;
+  throw new Error(`WAN 2.1 devolvió una ruta local no accesible desde Render: ${reference}`);
 }
 
 export function cancelWanVideo(job) {
