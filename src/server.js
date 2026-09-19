@@ -11,7 +11,7 @@ import { randomUUID } from 'node:crypto';
 import ffmpegPath from 'ffmpeg-static';
 import { finalizeGeneration, refundGeneration } from './billing-ledger.js';
 import { checkDatabase } from './database.js';
-import { generateKlingVideo, downloadKlingVideo, klingConfigured } from './kling-video-provider.js';
+import { generateKlingVideo, downloadKlingVideo, klingConfigured, klingSupportedNativeLanguages } from './kling-video-provider.js';
 
 const execFileAsync = promisify(execFile);
 const app = express();
@@ -47,6 +47,7 @@ app.get('/api/health', async (_req, res) => {
     klingConfigured: ready,
     nativeAudio: true,
     nativeDialogue: true,
+    nativeDialogueLanguages: klingSupportedNativeLanguages(),
     maxNativeDialogueSeconds: 15,
     billingPersistence: database.connected,
     billingDatabase: database.connected ? 'connected' : (database.configured ? 'error' : 'missing'),
