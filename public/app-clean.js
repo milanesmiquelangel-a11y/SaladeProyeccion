@@ -228,7 +228,7 @@ form.addEventListener('submit', async (event) => {
   generateBtn.disabled = true; cancelBtn.disabled = false;
   setLoading('Preparando WAN 2.2…', 'Conectando con un Space gratuito de Hugging Face.');
   try {
-    const response = await fetch(Number(durationInput.value) > 5 ? '/api/video/sequence' : '/api/video/generate', {
+    const response = await fetch('/api/video/generate', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ prompt, negative: negativeInput.value.trim(), aspect: aspectInput.value, duration: Number(durationInput.value), resolution: resolutionInput.value, frameRate: Number(frameRateInput.value), audioText: audioTextInput?.value.trim() || '', audioLanguage: audioLanguageInput?.value || 'en' })
     });
