@@ -29,7 +29,7 @@ A buyer can then concentrate on provider selection, branding, distribution and c
 - Prompt-to-video creation workflow.
 - 16:9, 9:16 and 1:1 output formats.
 - Configurable duration, quality and 24/30 FPS.
-- Optional multilingual narration.
+- Optional native multilingual character dialogue with Kling VIDEO 3.0.
 - FFmpeg normalization and video assembly.
 - Project drafts, local history and prompt templates.
 - PostgreSQL-backed credit accounting.
@@ -72,7 +72,7 @@ The project is being offered as a technology/product acquisition. There are no f
 
 The application is an orchestration/product layer around AI video providers. Provider availability, quotas, pricing, licensing and terms can change and must be independently verified by the buyer before production deployment.
 
-Wan 2.1 and Wan 2.2 are not used. Hugging Face ZeroGPU is not required for the prompt-to-video path.
+The active prompt-to-video engine is Kling VIDEO 3.0. Provider availability, pricing and language support must be independently verified before production deployment.
 
 ### Price
 
