@@ -230,7 +230,7 @@ form.addEventListener('submit', async (event) => {
   try {
     const response = await fetch('/api/video/generate', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ prompt, negative: negativeInput.value.trim(), aspect: aspectInput.value, duration: Number(durationInput.value), resolution: resolutionInput.value, frameRate: Number(frameRateInput.value), audioText: audioTextInput?.value.trim() || '', audioLanguage: audioLanguageInput?.value || 'en' })
+      body: JSON.stringify({ prompt, negative: negativeInput.value.trim(), aspect: aspectInput.value, duration: Number(durationInput.value), resolution: resolutionInput.value, frameRate: frameRateInput ? Number(frameRateInput.value) : 24, audioText: audioTextInput?.value.trim() || '', audioLanguage: audioLanguageInput?.value || 'en' })
     });
     const data = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(data.error || `El servidor rechazó la generación (HTTP ${response.status}).`);
