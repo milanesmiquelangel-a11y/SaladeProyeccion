@@ -25,7 +25,7 @@
     }
 
     const hint = document.querySelector('.audio-panel .hint');
-    if (hint) hint.textContent = 'Dialogue mode asks WAN 2.2 to keep the speaker visible and speaking on camera. Audio is generated natively with the video; no separate TTS track is added after generation.';
+    if (hint) hint.textContent = 'Dialogue mode asks Kling VIDEO 3.0 to keep the speaker visible and speaking on camera. Audio is generated natively with the video; no separate TTS track is added after generation.';
 
     const originalFetch = window.fetch.bind(window);
     window.fetch = async (input, init = {}) => {
