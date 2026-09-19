@@ -1,15 +1,14 @@
 {
   "name": "sala-de-proyeccion",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "private": true,
-  "description": "Backend Node/Express para Sala de Proyección con generación WAN 2.2, narración multilingüe y montaje FFmpeg.",
+  "description": "International AI video studio using the Kling VIDEO 3.0 native-audio generation path.",
   "type": "module",
-  "main": "src/wan-mode-entry.js",
+  "main": "src/server.js",
   "scripts": {
-    "start": "node src/wan-mode-entry.js",
-    "dev": "node --watch src/wan-mode-entry.js",
-    "check": "node --check src/wan-mode-entry.js && node --check src/final-generation-bootstrap.js && node --check src/wan-video-provider.js && node --check src/audio-tts.js",
-    "paypal:setup": "node scripts/paypal-setup.mjs"
+    "start": "node src/server.js",
+    "dev": "node --watch src/server.js",
+    "check": "node --check src/server.js && node --check src/kling-video-provider.js"
   },
   "engines": {
     "node": ">=18.17"
