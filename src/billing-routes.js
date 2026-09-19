@@ -15,6 +15,60 @@ function configured(_req, res, next) {
   next();
 }
 
+
+function requireAccount(req, res) {
+  const accountId = String(req.get('x-sala-user-id') || '').trim();
+  if (!accountId || !/^[a-zA-Z0-9_-]{16,80}$/.test(accountId)) {
+    res.status(401).json({ error: 'Cuenta no autenticada.' });
+    return null;
+  }
+  return accountId;
+}
+
+router.get('/balance', async (req, res) => {
+  const accountId = requireAccount(req, res);
+  if (!accountId) return;
+  try {
+    const { getAccount } = await import('./billing-ledger.js');
+    const account = await getAccount(accountId);
+    return res.json({
+      credits: account.credits,
+      plan: account.plan,
+      totalConsumed: account.totalConsumed,
+      nextRechargeAt: account.nextRechargeAt,
+      freeRechargeCredits: 3
+    });
+  } catch (error) {
+    console.error('Billing balance error:', error);
+    return res.status(503).json({ error: error.message || 'No se pudo consultar el saldo.' });
+  }
+});
+
+router.get('/transactions', async (req, res) => {
+  const accountId = requireAccount(req, res);
+  if (!accountId) return;
+  try {
+    const result = await dbQuery(
+      "SELECT type, route, cost, credits, status, created_at FROM sala_transactions WHERE user_id = $1 ORDER BY created_at DESC LIMIT 50",
+      [accountId]
+    );
+    return res.json({
+      transactions: result.rows.map((row) => ({
+        type: row.type,
+        route: row.route,
+        cost: Number(row.cost || 0),
+        credits: Number(row.credits || 0),
+        status: row.status,
+        createdAt: new Date(row.created_at).getTime()
+      }))
+    });
+  } catch (error) {
+    console.error('Billing transactions error:', error);
+    return res.status(503).json({ error: error.message || 'No se pudo cargar la actividad.' });
+  }
+});
+
+
 router.get('/status', (_req, res) => {
   const status = paypalStatus();
   res.json({
