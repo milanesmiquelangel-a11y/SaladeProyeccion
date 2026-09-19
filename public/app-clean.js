@@ -85,7 +85,7 @@ function currentProject() {
     aspect: aspectInput.value,
     duration: Number(durationInput.value),
     resolution: resolutionInput.value,
-    frameRate: Number(frameRateInput.value),
+    frameRate: frameRateInput ? Number(frameRateInput.value) : 24,
     createdAt: activeProject?.createdAt || Date.now(),
     updatedAt: Date.now(),
     status: 'borrador',
@@ -136,7 +136,7 @@ function loadProject(id) {
   aspectInput.value = p.aspect || '16:9';
   durationInput.value = String(p.duration || 5);
   resolutionInput.value = p.resolution || 'standard';
-  frameRateInput.value = String(p.frameRate || 24);
+  if (frameRateInput) frameRateInput.value = String(p.frameRate || 24);
   updateCounter();
   if (p.url) showVideo(p.url); else resetResult();
   showView('crear');
