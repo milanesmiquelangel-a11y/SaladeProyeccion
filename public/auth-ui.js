@@ -11,7 +11,7 @@
     .auth-tabs { display:grid; grid-template-columns:1fr 1fr; gap:8px; margin-bottom:20px; }
     .auth-tab { border:1px solid rgba(255,255,255,.12); background:#0e1529; color:#b9c2d8; padding:11px; border-radius:10px; cursor:pointer; font-weight:600; }
     .auth-tab.active { background:#1f6feb; color:white; border-color:#1f6feb; }
-    .auth-field { display:block; margin:14px 0; } .auth-field span { display:block; margin-bottom:7px; font-size:13px; color:#c7cee0; }
+    .auth-field { display:block; margin:14px 0; } .auth-field[hidden] { display:none !important; } .auth-field span { display:block; margin-bottom:7px; font-size:13px; color:#c7cee0; }
     .auth-field input { width:100%; box-sizing:border-box; padding:13px 14px; border-radius:10px; border:1px solid #33405e; background:#0a1020; color:white; outline:none; }
     .auth-field input:focus { border-color:#5d9cff; }
     #authSubmit { width:100%; margin-top:8px; padding:13px; border:0; border-radius:10px; background:#1f6feb; color:white; font-weight:700; cursor:pointer; }
