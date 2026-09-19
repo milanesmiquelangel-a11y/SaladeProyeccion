@@ -1,4 +1,5 @@
 import 'dotenv/config';
+import './auth-bridge.js';
 import express from 'express';
 import cors from 'cors';
 import path from 'node:path';
@@ -9,7 +10,9 @@ import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
 import { randomUUID } from 'node:crypto';
 import ffmpegPath from 'ffmpeg-static';
-import { finalizeGeneration, refundGeneration } from './billing-ledger.js';
+import { finalizeGeneration, refundGeneration, reserveGeneration } from './billing-ledger.js';
+import { getAuthenticatedUserId } from './auth.js';
+import billingRouter from './billing-routes.js';
 import { checkDatabase } from './database.js';
 import { generateKlingVideo, downloadKlingVideo, klingConfigured, klingSupportedNativeLanguages } from './kling-video-provider.js';
 
@@ -25,6 +28,7 @@ const TIMEOUT = 20 * 60 * 1000;
 
 app.use(cors());
 app.use(express.json({ limit: '1mb' }));
+app.use('/api/billing', billingRouter);
 
 app.get('/', async (_req, res) => {
   try {
@@ -73,6 +77,8 @@ function clearBilling(id) {
 }
 
 app.post('/api/video/generate', async (req, res) => {
+  const userId = String(req.get('x-sala-user-id') || '').trim() || await getAuthenticatedUserId(req);
+  if (!userId) return res.status(401).json({ error: 'Inicia sesión antes de generar un vídeo.' });
   if (!klingConfigured()) return res.status(503).json({ error: 'Kling VIDEO 3.0 no está configurado. Añade KLING_ACCESS_KEY y KLING_SECRET_KEY en Render.' });
   let settings;
   try { settings = normalize(req.body); } catch (e) { return res.status(400).json({ error: e.message }); }
@@ -84,6 +90,14 @@ app.post('/api/video/generate', async (req, res) => {
   if (prompt.length > 4000) return res.status(400).json({ error: 'prompt no puede superar 4000 caracteres.' });
   if (audioText.length > 4000) return res.status(400).json({ error: 'audioText no puede superar 4000 caracteres.' });
 
+  const cost = settings.resolution === 'high' ? 2 : 1;
+  let reservation;
+  try {
+    reservation = await reserveGeneration(userId, cost, '/api/video/generate');
+  } catch (error) {
+    const status = error?.code === 'INSUFFICIENT_CREDITS' ? 402 : 503;
+    return res.status(status).json({ error: error.message || 'No se pudo reservar el crédito.', credits: error?.credits ?? null, required: cost, nextRechargeAt: error?.nextRechargeAt ?? null });
+  }
   const id = randomUUID();
   const job = { id, status: 'QUEUED', createdAt: Date.now(), cancelled: false, provider: 'Kling VIDEO 3.0', providerState: 'QUEUED', providerRequestId: null, detail: 'Preparando generación…', outputUrl: '', nativeAudio: Boolean(audioText) };
   jobs.set(id, job);
@@ -96,7 +110,9 @@ app.post('/api/video/generate', async (req, res) => {
     const b = clearBilling(id);
     if (b?.userId && b?.transactionId) await refundGeneration(b.userId, b.transactionId, 'generation_timeout');
   }, TIMEOUT);
-  billing.set(id, { userId: req.salaBillingUserId, transactionId: req.salaBillingTransactionId, timer });
+  billing.set(id, { userId, transactionId: reservation.transactionId, timer });
+  res.set('X-Sala-Credits', String(reservation.credits));
+  res.set('X-Sala-Cost', String(cost));
 
   res.status(202).json({ request_id: id, settings, provider: 'Kling VIDEO 3.0', nativeAudio: Boolean(audioText), audioLanguage });
 
