@@ -12,7 +12,7 @@ This checklist is intended to make a technical review of Sala de Proyección str
 
 ## Backend
 
-- [ ] Review `src/wan-mode-entry.js` and application bootstrap flow.
+- [ ] Review `src/server.js` and the active Kling application bootstrap flow.
 - [ ] Review provider integration and environment-variable configuration.
 - [ ] Review FFmpeg normalization/assembly workflow.
 - [ ] Review `/api/health` deployment health endpoint.
@@ -44,7 +44,7 @@ This checklist is intended to make a technical review of Sala de Proyección str
 
 The application is provider-oriented rather than tied to a guarantee of one external service. Before commercial launch, the buyer should independently verify the selected provider's current API availability, quotas, pricing, licensing and terms.
 
-Wan 2.1 and Wan 2.2 are not part of the intended product strategy, and Hugging Face ZeroGPU is not required for the prompt-to-video path.
+The active prompt-to-video path is Kling VIDEO 3.0. Obsolete WAN generation entrypoints have been removed from the production tree.
 
 ## Handoff acceptance
 
