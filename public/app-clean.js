@@ -174,8 +174,8 @@ async function health() {
     const response = await fetch('/api/health');
     const data = await response.json();
     const ready = response.ok && data.generationReady;
-    apiBadge.textContent = ready ? 'WAN 2.2 lista' : 'Motor pendiente';
-    providerSetting.textContent = `${data.provider || 'WAN 2.2'} · ${ready ? 'lista' : 'esperando'}`;
+    apiBadge.textContent = ready ? 'Kling VIDEO 3.0 lista' : 'Motor pendiente';
+    providerSetting.textContent = `${data.provider || 'Kling VIDEO 3.0'} · ${ready ? 'lista' : 'esperando'}`;
     providerDot.classList.toggle('ready', ready);
   } catch {
     apiBadge.textContent = 'Servidor desconectado';
@@ -195,7 +195,7 @@ async function poll(jobId, startedAt) {
     const response = await fetch(`/api/video/status/${encodeURIComponent(jobId)}`);
     const data = await response.json();
     if (!response.ok) throw new Error(data.error || 'No se pudo consultar el estado.');
-    setLoading('Generando con WAN 2.2…', data.detail || `${data.providerState || 'Procesando'} · escena ${data.currentScene || 0}/${data.totalScenes || 1}`);
+    setLoading('Generando con Kling VIDEO 3.0…', data.detail || `${data.providerState || 'Procesando'} · escena ${data.currentScene || 0}/${data.totalScenes || 1}`);
     if (data.status === 'COMPLETED' && data.outputUrl) {
       showVideo(data.outputUrl);
       saveProject({ status: 'completado', url: data.outputUrl, requestId: jobId });
@@ -226,7 +226,7 @@ form.addEventListener('submit', async (event) => {
   const project = saveProject({ status: 'procesando', url: '' });
   saveHistory({ name: project.name, prompt: project.prompt, status: 'solicitud enviada' });
   generateBtn.disabled = true; cancelBtn.disabled = false;
-  setLoading('Preparando WAN 2.2…', 'Conectando con un Space gratuito de Hugging Face.');
+  setLoading('Preparando Kling VIDEO 3.0…', 'Conectando con Kling VIDEO 3.0 Native Audio.');
   try {
     const response = await fetch('/api/video/generate', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
