@@ -6,22 +6,18 @@ services:
     startCommand: npm start
     healthCheckPath: /api/health
     envVars:
-      - key: VIDEO_PROVIDER
-        value: wan2.2-free
-      - key: WAN_SPACE_ID
-        value: Upsampler/wan-2-2-5b-video
-      - key: WAN_MODEL
-        value: Wan2.2
-      - key: WAN_STEPS
-        value: "8"
-      - key: WAN_GUIDE_SCALE
-        value: "5"
-      - key: WAN_FRAMES
-        value: "49"
-      - key: WAN_CONNECT_TIMEOUT_MS
-        value: "45000"
-      - key: HF_TOKEN
+      - key: KLING_API_KEY
         sync: false
+      - key: KLING_API_BASE_URL
+        value: https://api.klingai.com
+      - key: KLING_MODEL
+        value: kling-v3
+      - key: KLING_MODE
+        value: auto
+      - key: KLING_TIMEOUT_MS
+        value: "1200000"
+      - key: KLING_POLL_MS
+        value: "6000"
       - key: DATABASE_URL
         sync: false
       - key: ADMIN_PASSWORD
