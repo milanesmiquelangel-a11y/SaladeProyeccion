@@ -29,9 +29,7 @@ app.use(express.json({ limit: '1mb' }));
 app.get('/', async (_req, res) => {
   try {
     let html = await fs.readFile(path.join(publicDir, 'index.html'), 'utf8');
-    const tag = '<script src="/kling-native-ui.js?v=20260919" defer></script>';
-    if (!html.includes('/kling-native-ui.js')) html = html.replace('</body>', `${tag}</body>`);
-    res.type('html').send(html);
+        res.type('html').send(html);
   } catch { res.sendFile(path.join(publicDir, 'index.html')); }
 });
 app.use(express.static(publicDir));
