@@ -5,7 +5,6 @@ import crypto from 'node:crypto';
 const BASE_URL = String(process.env.KLING_API_BASE_URL || 'https://api.klingai.com').replace(/\/$/, '');
 const ACCESS_KEY = String(process.env.KLING_ACCESS_KEY || '').trim();
 const SECRET_KEY = String(process.env.KLING_SECRET_KEY || '').trim();
-const LEGACY_API_KEY = String(process.env.KLING_API_KEY || '').trim();
 const MODEL = String(process.env.KLING_MODEL || 'kling-v3').trim();
 const TIMEOUT_MS = Number(process.env.KLING_TIMEOUT_MS || 20 * 60 * 1000);
 const POLL_MS = Number(process.env.KLING_POLL_MS || 6000);
@@ -30,7 +29,6 @@ function klingJwt() {
 function authHeaders() {
   const token = klingJwt();
   if (token) return { Authorization: `Bearer ${token}` };
-  if (LEGACY_API_KEY) return { Authorization: `Bearer ${LEGACY_API_KEY}` };
   return {};
 }
 
@@ -105,7 +103,7 @@ async function requestJson(url, options = {}) {
 }
 
 export function klingConfigured() {
-  return Boolean((ACCESS_KEY && SECRET_KEY) || LEGACY_API_KEY);
+  return Boolean(ACCESS_KEY && SECRET_KEY);
 }
 
 export function nativeDialogueLanguageSupported(value) {
