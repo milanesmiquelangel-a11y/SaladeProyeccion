@@ -74,9 +74,14 @@ async function copyPrompt() {
   }
 }
 
+function makeProjectId() {
+  try { if (crypto?.randomUUID) return crypto.randomUUID(); } catch (_) {}
+  return `project-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
 function currentProject() {
   return {
-    id: activeProject?.id || crypto.randomUUID(),
+    id: activeProject?.id || makeProjectId(),
     name: (projectNameInput.value.trim() || 'Proyecto sin título').slice(0, 80),
     prompt: promptInput.value.trim(),
     audioText: audioTextInput?.value.trim() || '',
@@ -217,6 +222,20 @@ async function cancelActive() {
   activeJobId = null; cancelBtn.disabled = true; generateBtn.disabled = false;
 }
 
+if (form) form.noValidate = true;
+
+window.addEventListener('error', (event) => {
+  if (event?.error) showError(`Error de la interfaz: ${event.error.message || event.error}`);
+});
+window.addEventListener('unhandledrejection', (event) => {
+  const reason = event?.reason;
+  if (reason) showError(`Error de la interfaz: ${reason.message || reason}`);
+});
+
+generateBtn?.addEventListener('click', () => {
+  if (!promptInput?.value.trim()) showError('Escribe una descripción de la escena antes de generar.');
+});
+
 form.addEventListener('submit', async (event) => {
   event.preventDefault();
   clearError(); clearTimeout(pollTimer);
@@ -230,7 +249,7 @@ form.addEventListener('submit', async (event) => {
   try {
     const response = await fetch('/api/video/generate', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ prompt, negative: negativeInput.value.trim(), aspect: aspectInput.value, duration: Number(durationInput.value), resolution: resolutionInput.value, frameRate: frameRateInput ? Number(frameRateInput.value) : 24, audioText: audioTextInput?.value.trim() || '', audioLanguage: audioLanguageInput?.value || 'en' })
+      body: JSON.stringify({ prompt, negative: negativeInput.value.trim(), aspect: aspectInput.value, duration: Number(durationInput.value), resolution: resolutionInput.value, audioText: audioTextInput?.value.trim() || '', audioLanguage: audioLanguageInput?.value || 'en' })
     });
     const data = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(data.error || `El servidor rechazó la generación (HTTP ${response.status}).`);
