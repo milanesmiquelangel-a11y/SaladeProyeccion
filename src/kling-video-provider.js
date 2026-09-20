@@ -3,6 +3,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 
 const BASE_URL = String(process.env.KLING_API_BASE_URL || 'https://api.klingai.com').replace(/\/$/, '');
+const API_KEY = String(process.env.KLING_API_KEY || '').trim();
 const ACCESS_KEY = String(process.env.KLING_ACCESS_KEY || '').trim();
 const SECRET_KEY = String(process.env.KLING_SECRET_KEY || '').trim();
 const MODEL = String(process.env.KLING_MODEL || 'kling-v3').trim();
@@ -16,7 +17,7 @@ function base64url(value) {
   return Buffer.from(value).toString('base64').replace(/=/g, '').replace(/\+/g, '-').replace(/\//g, '_');
 }
 
-function klingJwt() {
+function legacyKlingJwt() {
   if (!ACCESS_KEY || !SECRET_KEY) return '';
   const now = Math.floor(Date.now() / 1000);
   const header = base64url(JSON.stringify({ alg: 'HS256', typ: 'JWT' }));
@@ -27,9 +28,12 @@ function klingJwt() {
 }
 
 function authHeaders() {
-  const token = klingJwt();
-  if (token) return { Authorization: `Bearer ${token}` };
-  return {};
+  // Current Kling developer console issues one API Key. Send it directly as Bearer.
+  if (API_KEY) return { Authorization: `Bearer ${API_KEY}` };
+
+  // Keep backwards compatibility with the older Access Key + Secret Key/JWT setup.
+  const token = legacyKlingJwt();
+  return token ? { Authorization: `Bearer ${token}` } : {};
 }
 
 function aspectRatio(value) {
@@ -67,7 +71,7 @@ function buildDialoguePrompt(prompt, audioText, audioLanguage = 'en') {
     `Language: ${languageName(lang)}.`,
     'No off-screen narrator. No silent mouth while speech is heard.',
     'Use natural facial expression, breathing, eye movement and delivery matching the dialogue.',
-    `[Speaker]: "${dialogue.replaceAll('"', '\\\"')}"`
+    `[Speaker]: "${dialogue.replaceAll('"', '\\\\"')}"`
   ].join('\n').slice(0, 2500);
 }
 
@@ -103,7 +107,7 @@ async function requestJson(url, options = {}) {
 }
 
 export function klingConfigured() {
-  return Boolean(ACCESS_KEY && SECRET_KEY);
+  return Boolean(API_KEY || (ACCESS_KEY && SECRET_KEY));
 }
 
 export function nativeDialogueLanguageSupported(value) {
@@ -115,7 +119,7 @@ export function klingSupportedNativeLanguages() {
 }
 
 export async function generateKlingVideo({ prompt, negative, audioText, audioLanguage = 'en', aspect = '16:9', duration = 5, resolution = 'high', job }) {
-  if (!klingConfigured()) throw new Error('Kling no está configurado. Añade KLING_ACCESS_KEY y KLING_SECRET_KEY en Render.');
+  if (!klingConfigured()) throw new Error('Kling no está configurado. Añade KLING_API_KEY en Render.');
 
   const seconds = durationFor(duration);
   const ratio = aspectRatio(aspect);
