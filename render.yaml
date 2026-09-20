@@ -6,9 +6,7 @@ services:
     startCommand: npm start
     healthCheckPath: /api/health
     envVars:
-      - key: KLING_ACCESS_KEY
-        sync: false
-      - key: KLING_SECRET_KEY
+      - key: KLING_API_KEY
         sync: false
       - key: KLING_API_BASE_URL
         value: https://api.klingai.com
