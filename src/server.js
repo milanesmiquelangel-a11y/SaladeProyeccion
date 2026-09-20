@@ -79,7 +79,7 @@ function clearBilling(id) {
 app.post('/api/video/generate', async (req, res) => {
   const userId = String(req.get('x-sala-user-id') || '').trim() || await getAuthenticatedUserId(req);
   if (!userId) return res.status(401).json({ error: 'Inicia sesión antes de generar un vídeo.' });
-  if (!klingConfigured()) return res.status(503).json({ error: 'Kling VIDEO 3.0 no está configurado. Añade KLING_ACCESS_KEY y KLING_SECRET_KEY en Render.' });
+  if (!klingConfigured()) return res.status(503).json({ error: 'Kling VIDEO 3.0 no está configurado. Añade KLING_API_KEY en Render.' });
   let settings;
   try { settings = normalize(req.body); } catch (e) { return res.status(400).json({ error: e.message }); }
   const prompt = String(req.body?.prompt || '').trim();
