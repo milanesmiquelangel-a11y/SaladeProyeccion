@@ -2,7 +2,10 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import crypto from 'node:crypto';
 
-const BASE_URL = String(process.env.KLING_API_BASE_URL || 'https://api.klingai.com').replace(/\/$/, '');
+const configuredBaseUrl = String(process.env.KLING_API_BASE_URL || '').trim();
+const BASE_URL = /^https?:\/\//i.test(configuredBaseUrl)
+  ? configuredBaseUrl.replace(/\/$/, '')
+  : 'https://api.klingai.com';
 const API_KEY = String(process.env.KLING_API_KEY || '').trim();
 const ACCESS_KEY = String(process.env.KLING_ACCESS_KEY || '').trim();
 const SECRET_KEY = String(process.env.KLING_SECRET_KEY || '').trim();
@@ -120,6 +123,7 @@ export function klingSupportedNativeLanguages() {
 
 export async function generateKlingVideo({ prompt, negative, audioText, audioLanguage = 'en', aspect = '16:9', duration = 5, resolution = 'high', job }) {
   if (!klingConfigured()) throw new Error('Kling no está configurado. Añade KLING_API_KEY en Render.');
+  if (!/^https?:\/\//i.test(BASE_URL)) throw new Error('KLING_API_BASE_URL no es una URL válida. Usa https://api.klingai.com en Render.');
 
   const seconds = durationFor(duration);
   const ratio = aspectRatio(aspect);
