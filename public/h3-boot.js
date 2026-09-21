@@ -40,12 +40,10 @@
       const Client = mod.Client, handle_file = mod.handle_file;
       if(!Client) throw new Error('No se pudo cargar @gradio/client.');
       const client = await Client.connect('MiniMaxAI/MiniMax-H3-Turbo-Lora');
-      const api = await client.view_api();
-      const endpoints = Object.keys(api?.named_endpoints || {});
-      const endpoint = endpoints.find((name) => /predict_fn_generate_video/i.test(name))
-        || endpoints.find((name) => name === '/generate')
-        || endpoints.find((name) => /generate/i.test(name));
-      if(!endpoint) throw new Error('MiniMax H3 no expone un endpoint de generación compatible.');
+      // The live Space has already exposed this exact Workflow endpoint:
+      // /predict_fn_generate_video. Do not depend on view_api(), because
+      // ZeroGPU can expose the endpoint metadata inconsistently to clients.
+      const endpoint = '/predict_fn_generate_video';
 
       const languageNames={en:'English',es:'Spanish',ru:'Russian',kk:'Kazakh',fr:'French',de:'German',it:'Italian',pt:'Portuguese',ar:'Arabic',ja:'Japanese',ko:'Korean','zh-CN':'Chinese'};
       const dialogue=($('audioText')?.value || '').trim();
@@ -64,21 +62,23 @@
 
       setLoading('MiniMax H3 en cola…','Solicitud enviada. Esperando GPU gratuita de ZeroGPU…');
       let result;
-      if(/predict_fn_generate_video/i.test(endpoint)){
-        // The live Space is currently exposing the gr.Workflow endpoint.
-        result=await client.predict(endpoint,[fullPrompt,firstRef,lastRef,canvas,duration,4,seed,false,'larry']);
-      }else{
-        // Newer server-mode H3 endpoint.
-        result=await client.predict(endpoint,{
-          prompt:fullPrompt,
-          image_path:firstRef,
-          last_image_path:lastRef,
+      try {
+        // Current live H3 Workflow endpoint.
+        result = await client.predict('/predict_fn_generate_video', [
+          fullPrompt, firstRef, lastRef, canvas, duration, 4, seed, false, 'larry'
+        ]);
+      } catch (workflowError) {
+        // Fallback for a newer server-mode Space.
+        result = await client.predict('/generate', {
+          prompt: fullPrompt,
+          image_path: firstRef,
+          last_image_path: lastRef,
           canvas,
           duration,
-          steps:4,
+          steps: 4,
           seed,
-          upsample:false,
-          use_lora:true
+          upsample: false,
+          use_lora: true
         });
       }
 
