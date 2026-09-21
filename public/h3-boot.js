@@ -14,16 +14,15 @@
     };
     if (!prompt) return showError('Escribe una descripción de la escena.');
     const provider = $('videoProvider')?.value || 'h3';
-    if (provider !== 'h3') return showError('La conexión directa está preparada ahora para MiniMax H3. Selecciona MiniMax H3 Turbo.');
-    const loading = $('loadingState');
-    const empty = $('emptyState');
-    const title = $('loadingTitle');
-    const detail = $('loadingDetail');
-    const status = $('statusText');
+    if (provider !== 'h3') return showError('Selecciona MiniMax H3 Turbo para usar la generación gratuita.');
+
+    const loading = $('loadingState'), empty = $('emptyState'), title = $('loadingTitle');
+    const detail = $('loadingDetail'), status = $('statusText');
     const setLoading = (t,d) => {
       empty?.classList.add('hidden'); loading?.classList.remove('hidden');
-      if (title) title.textContent=t; if(detail) detail.textContent=d;
-      if(status) status.textContent='Procesando';
+      if (title) title.textContent=t;
+      if (detail) detail.textContent=d;
+      if (status) status.textContent='Procesando';
     };
     const showVideo = (url) => {
       loading?.classList.add('hidden'); empty?.classList.add('hidden');
@@ -32,17 +31,22 @@
       if(link){ link.href=url; link.classList.remove('hidden'); }
       if(status) status.textContent='Completado';
     };
+
     const oldText=button.textContent;
     button.disabled=true;
-    setLoading('Conectando con MiniMax H3…','Cargando el cliente oficial de Hugging Face.');
+    setLoading('Conectando con MiniMax H3…','Consultando la API disponible del Space oficial.');
     try {
       const mod = await import('https://cdn.jsdelivr.net/npm/@gradio/client@2.7.0/dist/index.min.js');
       const Client = mod.Client, handle_file = mod.handle_file;
       if(!Client) throw new Error('No se pudo cargar @gradio/client.');
-      setLoading('Conectando con MiniMax H3…','Preparando la GPU gratuita de ZeroGPU.');
-      // Use the official current Gradio client. Data events are sufficient here and avoid
-      // parsing legacy status payloads that some ZeroGPU workflow responses may omit.
       const client = await Client.connect('MiniMaxAI/MiniMax-H3-Turbo-Lora');
+      const api = await client.view_api();
+      const endpoints = Object.keys(api?.named_endpoints || {});
+      const endpoint = endpoints.find((name) => /predict_fn_generate_video/i.test(name))
+        || endpoints.find((name) => name === '/generate')
+        || endpoints.find((name) => /generate/i.test(name));
+      if(!endpoint) throw new Error('MiniMax H3 no expone un endpoint de generación compatible.');
+
       const languageNames={en:'English',es:'Spanish',ru:'Russian',kk:'Kazakh',fr:'French',de:'German',it:'Italian',pt:'Portuguese',ar:'Arabic',ja:'Japanese',ko:'Korean','zh-CN':'Chinese'};
       const dialogue=($('audioText')?.value || '').trim();
       const lang=languageNames[$('audioLanguage')?.value || 'en'] || 'English';
@@ -54,56 +58,38 @@
       const duration=Math.max(5,Math.min(15,Number($('duration')?.value)||5));
       const first=$('h3FirstFrame')?.files?.[0];
       const last=$('h3LastFrame')?.files?.[0];
-      const payload={
-        prompt: fullPrompt,
-        image: first ? handle_file(first) : null,
-        last_image: last ? handle_file(last) : null,
-        canvas,
-        duration,
-        steps: 4,
-        seed: Math.floor(Math.random()*2147483647),
-        upsample: false,
-        lora: 'larry'
-      };
-      setLoading('MiniMax H3 en cola…','Esperando GPU gratuita de ZeroGPU.');
-      // Official current H3 API: /generate with a named-object payload.
-      // The Space's current frontend uses client.predict('/generate', {...}).
-      const job=client.predict('/generate', {
-        prompt: payload.prompt,
-        image_path: payload.image,
-        last_image_path: payload.last_image,
-        canvas: payload.canvas,
-        duration: payload.duration,
-        steps: payload.steps,
-        seed: payload.seed,
-        upsample: payload.upsample,
-        use_lora: true
-      });
-      const startedAt=Date.now();
-      setLoading('MiniMax H3 en cola…','Solicitud enviada al API oficial de H3. Esperando GPU gratuita de ZeroGPU…');
-      const result=await job;
-      const elapsed=Math.floor((Date.now()-startedAt)/1000);
-      setLoading('MiniMax H3 procesado…',`Respuesta recibida en ${elapsed} s.`);
-      let data=result?.data || [];
+      const firstRef=first ? handle_file(first) : null;
+      const lastRef=last ? handle_file(last) : null;
+      const seed=Math.floor(Math.random()*2147483647);
+
+      setLoading('MiniMax H3 en cola…','Solicitud enviada. Esperando GPU gratuita de ZeroGPU…');
+      let result;
+      if(/predict_fn_generate_video/i.test(endpoint)){
+        // The live Space is currently exposing the gr.Workflow endpoint.
+        result=await client.predict(endpoint,[fullPrompt,firstRef,lastRef,canvas,duration,4,seed,false,'larry']);
+      }else{
+        // Newer server-mode H3 endpoint.
+        result=await client.predict(endpoint,{
+          prompt:fullPrompt,
+          image_path:firstRef,
+          last_image_path:lastRef,
+          canvas,
+          duration,
+          steps:4,
+          seed,
+          upsample:false,
+          use_lora:true
+        });
+      }
+
+      let data=result?.data || result || [];
       if(data.length===1 && Array.isArray(data[0])) data=data[0];
       const video=data[0];
-      const url=typeof video==='string' ? video : (video?.url || (video?.path ? 'https://huggingface.co/spaces/MiniMaxAI/MiniMax-H3-Turbo-Lora/gradio_api/file='+video.path : ''));
+      const url=typeof video==='string'
+        ? video
+        : (video?.url || (video?.path ? 'https://huggingface.co/spaces/MiniMaxAI/MiniMax-H3-Turbo-Lora/gradio_api/file='+video.path : ''));
       if(!url) throw new Error('MiniMax H3 terminó pero no devolvió el vídeo.');
       showVideo(url);
-      return;
-      /* Legacy workflow event stream retained only as unreachable reference.
-        for await (const msg of job) {
-          if(msg.type==='data'){
-            const data=msg.data || [];
-            const video=data[0];
-            const url=typeof video==='string' ? video : (video?.url || (video?.path ? 'https://huggingface.co/spaces/MiniMaxAI/MiniMax-H3-Turbo-Lora/gradio_api/file='+video.path : ''));
-            if(!url) throw new Error('MiniMax H3 terminó pero no devolvió el vídeo.');
-            showVideo(url);
-            completed=true;
-            break;
-          }
-        }
-      } */
     } catch(error) {
       showError('Error de generación: '+(error?.message || String(error)));
       if(status) status.textContent='Error';
@@ -114,6 +100,7 @@
     }
   }
 
+  window.startH3Generation = generateDirect;
   window.startSalaGeneration = generateDirect;
   button.addEventListener('click', generateDirect);
 })();
