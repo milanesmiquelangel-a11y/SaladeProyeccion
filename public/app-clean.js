@@ -326,12 +326,11 @@ window.addEventListener('unhandledrejection', (event) => {
   if (reason) showError(`Error de la interfaz: ${reason.message || reason}`);
 });
 
-generateBtn?.addEventListener('click', () => {
-  if (!promptInput?.value.trim()) showError('Escribe una descripción de la escena antes de generar.');
-});
+generateBtn?.addEventListener('click', startGeneration);
+form?.addEventListener('submit', startGeneration);
 
-form.addEventListener('submit', async (event) => {
-  event.preventDefault();
+async function startGeneration(event) {
+  if (event) event.preventDefault();
   clearError(); clearTimeout(pollTimer);
   const prompt = promptInput.value.trim();
   if (!prompt) return showError('Escribe una descripción de la escena.');
