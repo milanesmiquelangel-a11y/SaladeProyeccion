@@ -103,7 +103,9 @@ async function generateWithH3({ prompt, audioText, audioLanguage, aspect, durati
   const last = lastFile ? handle_file(lastFile) : null;
   const canvas = H3_CANVAS[aspect] || H3_CANVAS['16:9'];
   const safeDuration = Math.max(2, Math.min(14, Number(duration) || 5));
-  const seed = Math.floor(Math.random() * 2147483647);\n  // Render is a custom frontend, so the HF iframe ZeroGPU identity header is unavailable. Keep anonymous H3 requests within the 120-second xlarge reservation ceiling.\n  const steps = 2;
+  const seed = Math.floor(Math.random() * 2147483647);
+  // Render is a custom frontend, so the HF iframe ZeroGPU identity header is unavailable. Keep anonymous H3 requests within the 120-second xlarge reservation ceiling.
+  const steps = 2;
   const promptText = buildH3Prompt(prompt, audioText, audioLanguage);
   setLoading('MiniMax H3 en cola…', 'Esperando GPU gratuita de ZeroGPU…');
   const result = await client.predict('/output_video', [
