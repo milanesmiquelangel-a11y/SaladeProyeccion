@@ -95,33 +95,20 @@ function h3VideoUrl(video) {
 
 async function generateWithH3({ prompt, audioText, audioLanguage, aspect, duration }) {
   const client = await getH3Client();
-  const api = await client.view_api();
-  const endpoints = Object.keys(api?.named_endpoints || {});
-  const endpoint = endpoints.find((name) => /generate_video/i.test(name)) || endpoints.find((name) => /generate/i.test(name));
-  if (!endpoint) throw new Error('MiniMax H3 no expone actualmente un endpoint de generación compatible.');
-  const payload = {
-    prompt: buildH3Prompt(prompt, audioText, audioLanguage),
-    first_frame: h3FirstFrameInput?.files?.[0] || null,
-    last_frame: h3LastFrameInput?.files?.[0] || null,
-    canvas: H3_CANVAS[aspect] || H3_CANVAS['16:9'],
-    duration: Math.max(4, Math.min(14, Number(duration) || 5)),
-    steps: 6,
-    seed: Math.floor(Math.random() * 2147483647),
-    upsample: false,
-    lora: 'larry'
-  };
-  const submission = client.submit(endpoint, payload);
-  h3Submission = submission;
-  let data = null;
-  for await (const msg of submission) {
-    if (msg.type === 'status') {
-      if (msg.stage === 'pending') setLoading('MiniMax H3 en cola…', msg.position != null ? `Posición ${msg.position + 1} en ZeroGPU.` : 'Esperando GPU gratuita…');
-      else if (msg.stage === 'generating') setLoading('MiniMax H3 generando…', msg.eta ? `GPU ZeroGPU · ETA aproximada ${Math.ceil(msg.eta)} s.` : 'Generando vídeo + audio sincronizados…');
-      else if (msg.stage === 'error') throw new Error(msg.message || 'MiniMax H3 rechazó la generación.');
-    } else if (msg.type === 'data') data = msg.data;
-  }
-  h3Submission = null;
-  if (!data) throw new Error('MiniMax H3 no devolvió datos.');
+  const firstFile = h3FirstFrameInput?.files?.[0] || null;
+  const lastFile = h3LastFrameInput?.files?.[0] || null;
+  const { handle_file } = await import('https://cdn.jsdelivr.net/npm/@gradio/client@2.7.0/dist/index.min.js');
+  const first = firstFile ? handle_file(firstFile) : null;
+  const last = lastFile ? handle_file(lastFile) : null;
+  const canvas = H3_CANVAS[aspect] || H3_CANVAS['16:9'];
+  const safeDuration = Math.max(5, Math.min(15, Number(duration) || 5));
+  const seed = Math.floor(Math.random() * 2147483647);
+  const promptText = buildH3Prompt(prompt, audioText, audioLanguage);
+  setLoading('MiniMax H3 en cola…', 'Esperando GPU gratuita de ZeroGPU…');
+  const result = await client.predict('/output_video', [
+    promptText, first, last, canvas, safeDuration, 4, seed, false, 'larry'
+  ]);
+  let data = result?.data || result || [];
   if (data.length === 1 && Array.isArray(data[0])) data = data[0];
   const [video, report, refined] = data;
   const url = h3VideoUrl(video);
