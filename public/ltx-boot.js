@@ -24,7 +24,7 @@
     if (!v) return '';
     if (typeof v === 'string') {
       if (v.startsWith('http')) return v;
-      return 'https://huggingface.co/spaces/' + SPACE + '/gradio_api/file=' + v.replace(/^\\//, '');
+      return 'https://huggingface.co/spaces/' + SPACE + '/gradio_api/file=' + v.replace(/^\//, '');
     }
     if (Array.isArray(v)) {
       for (const item of v) {
@@ -37,7 +37,7 @@
       if (typeof v.url === 'string' && v.url) return v.url;
       if (typeof v.path === 'string' && v.path) {
         if (v.path.startsWith('http')) return v.path;
-        return 'https://huggingface.co/spaces/' + SPACE + '/gradio_api/file=' + v.path.replace(/^\\//, '');
+        return 'https://huggingface.co/spaces/' + SPACE + '/gradio_api/file=' + v.path.replace(/^\//, '');
       }
       for (const key of ['video','output','value','file','data']) {
         if (v[key]) {
