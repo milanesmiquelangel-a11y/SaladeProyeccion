@@ -52,19 +52,19 @@
         ? prompt+'\n\nThe visible character is the source of the voice. The character speaks physically with natural facial expressions, jaw and lip movements synchronized to every spoken word. No off-screen narrator. The character says exactly: <d>['+lang+'] '+dialogue+'</d>. The mouth must move while the dialogue is heard. Generate the dialogue as part of the synchronized soundtrack.'
         : prompt;
       const aspect=$('aspect')?.value || '16:9';
-      const canvas={'16:9':'1344x768 · 16:9 full','9:16':'768x1344 · 9:16 full','1:1':'768x768 · 1:1 full'}[aspect] || '1344x768 · 16:9 full';
-      const duration=Math.max(5,Math.min(15,Number($('duration')?.value)||5));
+      const canvas={'16:9':'960x544 · 16:9 fast','9:16':'544x960 · 9:16 fast','1:1':'544x544 · 1:1 fast'}[aspect] || '960x544 · 16:9 fast';
+      const duration=Math.max(2,Math.min(14,Number($('duration')?.value)||5));
       const first=$('h3FirstFrame')?.files?.[0];
       const last=$('h3LastFrame')?.files?.[0];
       const firstRef=first ? handle_file(first) : null;
       const lastRef=last ? handle_file(last) : null;
-      const seed=Math.floor(Math.random()*2147483647);
+      const seed=Math.floor(Math.random()*2147483647);\n      // The official H3 Space runs on xlarge ZeroGPU. From a custom site like Render there is no HF iframe x-ip-token, so the request is treated as unauthenticated. Keep the declared reservation at the anonymous 120-second ceiling: fast canvas + 2 Turbo steps.\n      const steps=2;
 
       setLoading('MiniMax H3 en cola…','Solicitud enviada. Esperando GPU gratuita de ZeroGPU…');
       let result;
       try {
         // Current live H3 Workflow endpoint.
-        result = await client.predict(endpoint, [fullPrompt, firstRef, lastRef, canvas, duration, 4, seed, false, 'larry']);
+        result = await client.predict(endpoint, [fullPrompt, firstRef, lastRef, canvas, duration, steps, seed, false, 'larry']);
       } catch (workflowError) {
         throw new Error('MiniMax H3 rechazó el endpoint /output_video: ' + (workflowError?.message || String(workflowError)));
       }
