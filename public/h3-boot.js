@@ -67,16 +67,28 @@
       };
       setLoading('MiniMax H3 en cola…','Esperando GPU gratuita de ZeroGPU.');
       const job=client.submit('/predict_fn_generate_video', [payload.prompt, payload.image, payload.last_image, payload.canvas, payload.duration, payload.steps, payload.seed, payload.upsample, payload.lora]);
-      for await (const msg of job) {
-        if(msg.type==='data'){
-          const data=msg.data || [];
-          const video=data[0];
-          const url=typeof video==='string' ? video : (video?.url || (video?.path ? 'https://huggingface.co/spaces/MiniMaxAI/MiniMax-H3-Turbo-Lora/gradio_api/file='+video.path : ''));
-          if(!url) throw new Error('MiniMax H3 terminó pero no devolvió el vídeo.');
-          showVideo(url);
-          break;
+      const startedAt=Date.now();
+      const queueWatch=setInterval(() => {
+        const elapsed=Math.floor((Date.now()-startedAt)/1000);
+        if (elapsed < 60) setLoading('MiniMax H3 en cola…',`Esperando GPU gratuita de ZeroGPU · ${elapsed} s.`);
+        else setLoading('MiniMax H3 en cola…',`La GPU todavía no está disponible · ${Math.floor(elapsed/60)} min ${elapsed%60} s.`);
+      },15000);
+      const timeout=setTimeout(() => { try { job.cancel(); } catch (_) {} },300000);
+      try {
+        for await (const msg of job) {
+          if(msg.type==='data'){
+            const data=msg.data || [];
+            const video=data[0];
+            const url=typeof video==='string' ? video : (video?.url || (video?.path ? 'https://huggingface.co/spaces/MiniMaxAI/MiniMax-H3-Turbo-Lora/gradio_api/file='+video.path : ''));
+            if(!url) throw new Error('MiniMax H3 terminó pero no devolvió el vídeo.');
+            showVideo(url);
+            break;
+          }
         }
+      } finally {
+        clearInterval(queueWatch); clearTimeout(timeout);
       }
+      if (!document.getElementById('videoPlayer')?.src) throw new Error('MiniMax H3 no obtuvo GPU después de 5 minutos. La cola de ZeroGPU está saturada. Inténtalo de nuevo más tarde.');
     } catch(error) {
       showError('Error de generación: '+(error?.message || String(error)));
       if(status) status.textContent='Error';
