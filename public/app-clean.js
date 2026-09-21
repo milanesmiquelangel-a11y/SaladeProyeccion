@@ -361,7 +361,10 @@ async function startGeneration(event) {
     h3Submission = null;
     generateBtn.disabled = false; cancelBtn.disabled = true; loadingState.classList.add('hidden'); statusText.textContent = 'Error'; showError(error.message);
   }
-});
+}
+
+generateBtn?.addEventListener('click', startGeneration);
+form?.addEventListener('submit', startGeneration);
 
 cancelBtn?.addEventListener('click', cancelActive);
 copyPromptBtn?.addEventListener('click', copyPrompt);
