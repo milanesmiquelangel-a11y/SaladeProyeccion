@@ -1,0 +1,99 @@
+(() => {
+  const $ = id => document.getElementById(id);
+  const button = $('generateBtn');
+  if (!button) return;
+
+  const SPACE = 'Lightricks/ltx-video-distilled';
+  let clientPromise = null;
+
+  async function getClient() {
+    if (!clientPromise) {
+      clientPromise = import('https://cdn.jsdelivr.net/npm/@gradio/client@2.7.0/dist/index.min.js')
+        .then(({Client}) => Client.connect(SPACE, {events:['data','status']}));
+    }
+    return clientPromise;
+  }
+
+  async function findEndpoint(client) {
+    try {
+      const info = await client.view_api({all_endpoints:true, print_info:false});
+      const named = Object.keys(info?.named_endpoints || {});
+      const unnamed = Object.keys(info?.unnamed_endpoints || {});
+      const all = [...named, ...unnamed];
+      const preferred = all.find(x => /generate/i.test(x)) || all.find(x => x !== '/js_fn');
+      if (preferred) return preferred;
+    } catch (_) {}
+    return '/generate';
+  }
+
+  function videoUrl(v) {
+    if (!v) return '';
+    if (typeof v === 'string') return v.startsWith('http') ? v : 'https://huggingface.co/spaces/' + SPACE + '/gradio_api/file=' + v;
+    if (v.url) return v.url.startsWith('http') ? v.url : 'https://huggingface.co/spaces/' + SPACE + '/gradio_api/file=' + v.url.replace(/^\//,'');
+    if (v.path) return 'https://huggingface.co/spaces/' + SPACE + '/gradio_api/file=' + v.path;
+    return '';
+  }
+
+  async function generate(event) {
+    event?.preventDefault();
+    if (button.disabled) return;
+    const prompt = ($('prompt')?.value || '').trim();
+    const errorBox = $('errorBox');
+    const showError = m => { if(errorBox){errorBox.textContent=m;errorBox.classList.remove('hidden');} };
+    if (!prompt) return showError('Escribe una descripción de la escena.');
+
+    button.disabled = true;
+    const old = button.textContent;
+    button.textContent = 'Generating with LTX Video…';
+    $('emptyState')?.classList.add('hidden');
+    $('loadingState')?.classList.remove('hidden');
+    if ($('loadingTitle')) $('loadingTitle').textContent = 'LTX Video 0.9.8 en cola…';
+    if ($('loadingDetail')) $('loadingDetail').textContent = 'Generación gratuita mediante el Space oficial de Lightricks.';
+    if ($('statusText')) $('statusText').textContent = 'Procesando';
+
+    try {
+      const client = await getClient();
+      const endpoint = await findEndpoint(client);
+      const duration = Math.max(0.3, Math.min(8.5, Number($('duration')?.value) || 2));
+      const aspect = $('aspect')?.value || '16:9';
+      const dims = {
+        '16:9':[512,768],
+        '9:16':[768,512],
+        '1:1':[512,512]
+      }[aspect] || [512,768];
+      const negative = ($('negative')?.value || 'worst quality, inconsistent motion, blurry, jittery, distorted').trim();
+      const seed = Math.floor(Math.random()*4294967295);
+      const first = $('h3FirstFrame')?.files?.[0] || null;
+      const {handle_file} = await import('https://cdn.jsdelivr.net/npm/@gradio/client@2.7.0/dist/index.min.js');
+      const image = first ? handle_file(first) : null;
+      const frames = Math.max(9, Math.min(257, Math.round(duration*30/8)*8+1));
+
+      const result = await client.predict(endpoint, [
+        prompt, negative, image, null,
+        dims[0], dims[1], 'text-to-video', duration, frames,
+        seed, true, 3.0, false
+      ]);
+
+      const data = result?.data || result || [];
+      const video = Array.isArray(data) ? data[0] : data;
+      const url = videoUrl(video);
+      if (!url) throw new Error('LTX terminó sin devolver un vídeo.');
+      const player = $('videoPlayer');
+      if (player) { player.src=url; player.classList.remove('hidden'); player.load(); }
+      const link=$('videoLink');
+      if(link){link.href=url;link.classList.remove('hidden');}
+      $('loadingState')?.classList.add('hidden');
+      if($('statusText')) $('statusText').textContent='Completado';
+    } catch (e) {
+      $('loadingState')?.classList.add('hidden');
+      if($('statusText')) $('statusText').textContent='Error';
+      showError('Error de generación LTX Video: ' + (e?.message || String(e)));
+    } finally {
+      button.disabled=false;
+      button.textContent=old;
+    }
+  }
+
+  window.startLtxGeneration = generate;
+  window.startSalaGeneration = generate;
+})();
