@@ -330,6 +330,7 @@ window.startSalaGeneration = startGeneration;
 form?.addEventListener('submit', startGeneration);
 
 async function startGeneration(event) {
+  if (generateBtn?.disabled) return;
   if (event) event.preventDefault();
   clearError(); clearTimeout(pollTimer);
   const prompt = promptInput.value.trim();
