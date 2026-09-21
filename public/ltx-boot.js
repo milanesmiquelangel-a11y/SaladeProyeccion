@@ -137,6 +137,19 @@
 
   window.startLtxGeneration = generate;
   window.startSalaGeneration = generate;
+  const hfInput = $('hfTokenInput');
+  const hfSave = $('saveHfTokenBtn');
+  const hfStatus = $('hfTokenStatus');
+  if (hfInput) hfInput.value = localStorage.getItem(HF_TOKEN_KEY) || '';
+  hfSave?.addEventListener('click', () => {
+    const token = (hfInput?.value || '').trim();
+    if (token) localStorage.setItem(HF_TOKEN_KEY, token);
+    else localStorage.removeItem(HF_TOKEN_KEY);
+    clientPromise = null;
+    if (hfStatus) hfStatus.textContent = token ? 'Token guardado en este navegador.' : 'Token eliminado.';
+    setTimeout(() => { if (hfStatus) hfStatus.textContent = ''; }, 3000);
+  });
+
   window.ltxBootReady = true;
 
   // Independent click path: LTX must remain callable even if the main app script
