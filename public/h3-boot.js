@@ -43,7 +43,7 @@
       // The live Space has already exposed this exact Workflow endpoint:
       // /predict_fn_generate_video. Do not depend on view_api(), because
       // ZeroGPU can expose the endpoint metadata inconsistently to clients.
-      const endpoint = '/predict_fn_generate_video';
+      const endpoint = '/output_video';
 
       const languageNames={en:'English',es:'Spanish',ru:'Russian',kk:'Kazakh',fr:'French',de:'German',it:'Italian',pt:'Portuguese',ar:'Arabic',ja:'Japanese',ko:'Korean','zh-CN':'Chinese'};
       const dialogue=($('audioText')?.value || '').trim();
@@ -64,22 +64,9 @@
       let result;
       try {
         // Current live H3 Workflow endpoint.
-        result = await client.predict('/predict_fn_generate_video', [
-          fullPrompt, firstRef, lastRef, canvas, duration, 4, seed, false, 'larry'
-        ]);
+        result = await client.predict(endpoint, [fullPrompt, firstRef, lastRef, canvas, duration, 4, seed, false, 'larry']);
       } catch (workflowError) {
-        // Fallback for a newer server-mode Space.
-        result = await client.predict('/generate', {
-          prompt: fullPrompt,
-          image_path: firstRef,
-          last_image_path: lastRef,
-          canvas,
-          duration,
-          steps: 4,
-          seed,
-          upsample: false,
-          use_lora: true
-        });
+        throw new Error('MiniMax H3 rechazó el endpoint /output_video: ' + (workflowError?.message || String(workflowError)));
       }
 
       let data=result?.data || result || [];
