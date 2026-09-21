@@ -5,6 +5,7 @@
   window.salaBootReady = true;
 
   async function generateDirect(event) {
+    if (button.disabled) return;
     if (event) event.preventDefault();
     const prompt = ($('prompt')?.value || '').trim();
     const errorBox = $('errorBox');
@@ -39,9 +40,9 @@
       const Client = mod.Client, handle_file = mod.handle_file;
       if(!Client) throw new Error('No se pudo cargar @gradio/client.');
       setLoading('Conectando con MiniMax H3…','Preparando la GPU gratuita de ZeroGPU.');
-      const client = await Client.connect('MiniMaxAI/MiniMax-H3-Turbo-Lora', {
-        events: ['status','data']
-      });
+      // Use the official current Gradio client. Data events are sufficient here and avoid
+      // parsing legacy status payloads that some ZeroGPU workflow responses may omit.
+      const client = await Client.connect('MiniMaxAI/MiniMax-H3-Turbo-Lora');
       const languageNames={en:'English',es:'Spanish',ru:'Russian',kk:'Kazakh',fr:'French',de:'German',it:'Italian',pt:'Portuguese',ar:'Arabic',ja:'Japanese',ko:'Korean','zh-CN':'Chinese'};
       const dialogue=($('audioText')?.value || '').trim();
       const lang=languageNames[$('audioLanguage')?.value || 'en'] || 'English';
@@ -50,7 +51,7 @@
         : prompt;
       const aspect=$('aspect')?.value || '16:9';
       const canvas={'16:9':'1344x768 · 16:9 full','9:16':'768x1344 · 9:16 full','1:1':'768x768 · 1:1 full'}[aspect] || '1344x768 · 16:9 full';
-      const duration=Math.max(5,Math.min(15,Number($('duration')?.value)||5));
+      const duration=Math.max(2,Math.min(14,Number($('duration')?.value)||5));
       const first=$('h3FirstFrame')?.files?.[0];
       const last=$('h3LastFrame')?.files?.[0];
       const payload={
@@ -59,17 +60,14 @@
         last_image: last ? handle_file(last) : null,
         canvas,
         duration,
-        steps: 10,
-        seed: Math.floor(Math.random()*2147483647)
+        steps: 6,
+        seed: Math.floor(Math.random()*2147483647),
+        upsample: false,
+        lora: 'larry'
       };
       setLoading('MiniMax H3 en cola…','Esperando GPU gratuita de ZeroGPU.');
       const job=client.submit('/predict_fn_generate_video', [payload.prompt, payload.image, payload.last_image, payload.canvas, payload.duration, payload.steps, payload.seed, payload.upsample, payload.lora]);
       for await (const msg of job) {
-        if(msg.type==='status'){
-          if(msg.stage==='pending') setLoading('MiniMax H3 en cola…',msg.position!=null?'Posición '+(msg.position+1)+'.':'Esperando GPU gratuita.');
-          else if(msg.stage==='generating') setLoading('MiniMax H3 generando…',msg.eta?'ETA aproximada '+Math.ceil(msg.eta)+' s.':'Generando vídeo + audio sincronizados.');
-          else if(msg.stage==='error') throw new Error(msg.message || 'MiniMax H3 rechazó la generación.');
-        }
         if(msg.type==='data'){
           const data=msg.data || [];
           const video=data[0];
