@@ -42,8 +42,8 @@
     const showError = m => { if(errorBox){errorBox.textContent=m;errorBox.classList.remove('hidden');} };
     const dialogue = ($('audioText')?.value || '').trim();
     const lang = $('audioLanguage')?.selectedOptions?.[0]?.textContent || 'English';
-    if (dialogue) prompt += `\\n\\nA visible character speaks on camera in ${lang}. Exact dialogue: "${dialogue}". Show natural facial expressions and mouth movement while speaking.`;\n    if (!prompt) return showError('Escribe una descripción de la escena.');
-
+    if (dialogue) prompt += `\n\nA visible character speaks on camera in ${lang}. Exact dialogue: "${dialogue}". Show natural facial expressions and mouth movement while speaking.`;
+    if (!prompt) return showError('Escribe una descripción de la escena.');
     button.disabled = true;
     const old = button.textContent;
     button.textContent = 'Generating with LTX Video…';
