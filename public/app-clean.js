@@ -3,6 +3,11 @@ const form = $('#videoForm');
 const promptInput = $('#prompt');
 const audioTextInput = $('#audioText');
 const audioLanguageInput = $('#audioLanguage');
+const videoProviderInput = $('#videoProvider');
+const providerHint = $('#providerHint');
+const h3FirstFrameInput = $('#h3FirstFrame');
+const h3LastFrameInput = $('#h3LastFrame');
+const h3FramesPanel = $('#h3FramesPanel');
 const projectNameInput = $('#projectName');
 const negativeInput = $('#negative');
 const aspectInput = $('#aspect');
@@ -38,6 +43,91 @@ const STORAGE = { projects: 'salaProjects', history: 'salaHistory', settings: 's
 let pollTimer = null;
 let activeJobId = null;
 let activeProject = null;
+let h3ClientPromise = null;
+let h3Submission = null;
+const H3_SPACE = 'MiniMaxAI/MiniMax-H3-Turbo-Lora';
+const H3_CANVAS = { '16:9': '1344x768 · 16:9 full', '9:16': '768x1344 · 9:16 full', '1:1': '768x768 · 1:1 full' };
+const H3_LANGUAGE_NAMES = { en:'English', es:'Spanish', ru:'Russian', kk:'Kazakh', fr:'French', de:'German', it:'Italian', pt:'Portuguese', ar:'Arabic', ja:'Japanese', ko:'Korean', 'zh-CN':'Chinese' };
+
+function selectedProvider() { return videoProviderInput?.value || 'h3'; }
+function updateProviderUi() {
+  const h3 = selectedProvider() === 'h3';
+  if (h3FramesPanel) h3FramesPanel.classList.toggle('hidden', !h3);
+  if (providerHint) providerHint.textContent = h3
+    ? 'MiniMax H3 runs directly from this page through the official Hugging Face Space. Free ZeroGPU has daily quotas and may queue when busy.'
+    : 'Kling VIDEO 3.0 uses the configured API on Render and requires an available Kling balance.';
+  if (generateBtn) generateBtn.textContent = h3 ? 'Generate with MiniMax H3' : 'Generate with Kling';
+}
+
+function buildH3Prompt(scene, dialogue, language) {
+  const base = String(scene || '').trim();
+  const text = String(dialogue || '').trim();
+  if (!text) return base;
+  const lang = H3_LANGUAGE_NAMES[language] || language || 'English';
+  return [
+    'integrated_multimodal_description:',
+    '[Shot 1] ',
+    base,
+    'The visible speaking character is the source of the voice and remains clearly visible on camera. The character speaks physically with natural facial expressions, jaw and lip movements synchronized to every spoken word.',
+    `The character says exactly this dialogue: <d>[${lang}] ${text}</d>`,
+    'The mouth must not remain closed while the dialogue is heard. No off-screen narrator. After speaking, the character stops speaking and returns to natural facial motion.',
+    '',
+    'overall_soundscape: Natural environmental and action sounds matching the scene; dialogue remains clear and synchronized.',
+    'non_diegetic_music: N/A unless the scene description explicitly requests music.'
+  ].join('\n');
+}
+
+async function getH3Client() {
+  if (!h3ClientPromise) {
+    h3ClientPromise = import('https://cdn.jsdelivr.net/npm/@gradio/client@2.7.0/dist/index.min.js')
+      .then(({ Client }) => Client.connect(H3_SPACE, { events: ['data', 'status'] }));
+  }
+  return h3ClientPromise;
+}
+
+function h3VideoUrl(video) {
+  if (!video) return '';
+  if (typeof video === 'string') return video.startsWith('http') ? video : `https://huggingface.co/spaces/${H3_SPACE}/gradio_api/file=${video}`;
+  if (video.url) return video.url;
+  if (video.path) return `https://huggingface.co/spaces/${H3_SPACE}/gradio_api/file=${video.path}`;
+  return '';
+}
+
+async function generateWithH3({ prompt, audioText, audioLanguage, aspect, duration }) {
+  const client = await getH3Client();
+  const api = await client.view_api();
+  const endpoints = Object.keys(api?.named_endpoints || {});
+  const endpoint = endpoints.find((name) => /generate_video/i.test(name)) || endpoints.find((name) => /generate/i.test(name));
+  if (!endpoint) throw new Error('MiniMax H3 no expone actualmente un endpoint de generación compatible.');
+  const payload = {
+    prompt: buildH3Prompt(prompt, audioText, audioLanguage),
+    first_frame: h3FirstFrameInput?.files?.[0] || null,
+    last_frame: h3LastFrameInput?.files?.[0] || null,
+    canvas: H3_CANVAS[aspect] || H3_CANVAS['16:9'],
+    duration: Math.max(4, Math.min(14, Number(duration) || 5)),
+    steps: 6,
+    seed: Math.floor(Math.random() * 2147483647),
+    upsample: false,
+    lora: 'larry'
+  };
+  const submission = client.submit(endpoint, payload);
+  h3Submission = submission;
+  let data = null;
+  for await (const msg of submission) {
+    if (msg.type === 'status') {
+      if (msg.stage === 'pending') setLoading('MiniMax H3 en cola…', msg.position != null ? `Posición ${msg.position + 1} en ZeroGPU.` : 'Esperando GPU gratuita…');
+      else if (msg.stage === 'generating') setLoading('MiniMax H3 generando…', msg.eta ? `GPU ZeroGPU · ETA aproximada ${Math.ceil(msg.eta)} s.` : 'Generando vídeo + audio sincronizados…');
+      else if (msg.stage === 'error') throw new Error(msg.message || 'MiniMax H3 rechazó la generación.');
+    } else if (msg.type === 'data') data = msg.data;
+  }
+  h3Submission = null;
+  if (!data) throw new Error('MiniMax H3 no devolvió datos.');
+  if (data.length === 1 && Array.isArray(data[0])) data = data[0];
+  const [video, report, refined] = data;
+  const url = h3VideoUrl(video);
+  if (!url) throw new Error('MiniMax H3 terminó pero no devolvió una referencia de vídeo.');
+  return { url, report: report || 'MiniMax H3 · vídeo + audio sincronizados', refined: refined || '' };
+}
 const TIMEOUT = 20 * 60 * 1000;
 
 function read(key, fallback) { try { return JSON.parse(localStorage.getItem(key) || JSON.stringify(fallback)); } catch { return fallback; } }
@@ -91,6 +181,7 @@ function currentProject() {
     duration: Number(durationInput.value),
     resolution: resolutionInput.value,
     frameRate: frameRateInput ? Number(frameRateInput.value) : 24,
+    videoProvider: selectedProvider(),
     createdAt: activeProject?.createdAt || Date.now(),
     updatedAt: Date.now(),
     status: 'borrador',
@@ -142,6 +233,8 @@ function loadProject(id) {
   durationInput.value = String(p.duration || 5);
   resolutionInput.value = p.resolution || 'standard';
   if (frameRateInput) frameRateInput.value = String(p.frameRate || 24);
+  if (videoProviderInput) videoProviderInput.value = p.videoProvider || 'h3';
+  updateProviderUi();
   updateCounter();
   if (p.url) showVideo(p.url); else resetResult();
   showView('crear');
@@ -179,8 +272,8 @@ async function health() {
     const response = await fetch('/api/health');
     const data = await response.json();
     const ready = response.ok && data.generationReady;
-    apiBadge.textContent = ready ? 'Kling VIDEO 3.0 lista' : 'Motor pendiente';
-    providerSetting.textContent = `${data.provider || 'Kling VIDEO 3.0'} · ${ready ? 'lista' : 'esperando'}`;
+    apiBadge.textContent = ready ? 'H3 + Kling disponibles' : 'H3 disponible · Kling pendiente';
+    providerSetting.textContent = `${data.provider || 'H3 + Kling'} · H3 ZeroGPU disponible${ready ? ' · Kling lista' : ''}`;
     providerDot.classList.toggle('ready', ready);
   } catch {
     apiBadge.textContent = 'Servidor desconectado';
@@ -216,6 +309,7 @@ async function poll(jobId, startedAt) {
 }
 
 async function cancelActive() {
+  if (h3Submission) { try { h3Submission.cancel(); } catch (_) {} h3Submission = null; }
   if (!activeJobId) return;
   clearTimeout(pollTimer);
   try { await fetch(`/api/video/cancel/${encodeURIComponent(activeJobId)}`, { method: 'POST' }); } catch (_) {}
@@ -242,11 +336,18 @@ form.addEventListener('submit', async (event) => {
   const prompt = promptInput.value.trim();
   if (!prompt) return showError('Escribe una descripción de la escena.');
   if (activeJobId) return;
-  const project = saveProject({ status: 'procesando', url: '' });
-  saveHistory({ name: project.name, prompt: project.prompt, status: 'solicitud enviada' });
+  const project = saveProject({ status: 'procesando', url: '', videoProvider: selectedProvider() });
+  saveHistory({ name: project.name, prompt: project.prompt, status: 'solicitud enviada', provider: selectedProvider() });
   generateBtn.disabled = true; cancelBtn.disabled = false;
-  setLoading('Preparando Kling VIDEO 3.0…', 'Conectando con Kling VIDEO 3.0 Native Audio.');
+  setLoading(selectedProvider() === 'h3' ? 'Preparando MiniMax H3…' : 'Preparando Kling VIDEO 3.0…', selectedProvider() === 'h3' ? 'Conectando directamente con Hugging Face ZeroGPU.' : 'Conectando con Kling VIDEO 3.0 Native Audio.');
   try {
+    if (selectedProvider() === 'h3') {
+      const result = await generateWithH3({ prompt, audioText: audioTextInput?.value.trim() || '', audioLanguage: audioLanguageInput?.value || 'en', aspect: aspectInput.value, duration: Number(durationInput.value) });
+      showVideo(result.url);
+      saveProject({ status: 'completado', url: result.url, providerReport: result.report, refinedPrompt: result.refined });
+      saveHistory({ name: activeProject?.name, prompt: activeProject?.prompt, status: 'completado', url: result.url, provider: 'MiniMax H3' });
+      activeJobId = null; generateBtn.disabled = false; cancelBtn.disabled = true; return;
+    }
     const response = await fetch('/api/video/generate', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ prompt, negative: negativeInput.value.trim(), aspect: aspectInput.value, duration: Number(durationInput.value), resolution: resolutionInput.value, audioText: audioTextInput?.value.trim() || '', audioLanguage: audioLanguageInput?.value || 'en' })
@@ -258,6 +359,7 @@ form.addEventListener('submit', async (event) => {
     saveProject({ status: 'procesando', requestId: activeJobId, sequenceId: data.job_id || '' });
     poll(activeJobId, Date.now());
   } catch (error) {
+    h3Submission = null;
     generateBtn.disabled = false; cancelBtn.disabled = true; loadingState.classList.add('hidden'); statusText.textContent = 'Error'; showError(error.message);
   }
 });
@@ -284,6 +386,8 @@ resetLocalBtn?.addEventListener('click', () => { localStorage.removeItem(STORAGE
 projectsGrid?.addEventListener('click', (event) => { const button = event.target.closest('.open-project'); if (button) loadProject(button.dataset.id); });
 promptInput?.addEventListener('input', updateCounter);
 document.querySelectorAll('[data-view]').forEach((button) => button.addEventListener('click', () => showView(button.dataset.view)));
+videoProviderInput?.addEventListener('change', updateProviderUi);
+updateProviderUi();
 document.querySelectorAll('.use-template, .chip').forEach((button) => button.addEventListener('click', () => {
   const name = button.dataset.template;
   const templates = {
