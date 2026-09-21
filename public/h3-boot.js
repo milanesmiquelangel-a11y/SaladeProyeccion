@@ -67,6 +67,7 @@
       };
       setLoading('MiniMax H3 en cola…','Esperando GPU gratuita de ZeroGPU.');
       const job=client.submit('/predict_fn_generate_video', [payload.prompt, payload.image, payload.last_image, payload.canvas, payload.duration, payload.steps, payload.seed, payload.upsample, payload.lora]);
+      let completed=false;
       const startedAt=Date.now();
       const queueWatch=setInterval(() => {
         const elapsed=Math.floor((Date.now()-startedAt)/1000);
@@ -82,13 +83,14 @@
             const url=typeof video==='string' ? video : (video?.url || (video?.path ? 'https://huggingface.co/spaces/MiniMaxAI/MiniMax-H3-Turbo-Lora/gradio_api/file='+video.path : ''));
             if(!url) throw new Error('MiniMax H3 terminó pero no devolvió el vídeo.');
             showVideo(url);
+            completed=true;
             break;
           }
         }
       } finally {
         clearInterval(queueWatch); clearTimeout(timeout);
       }
-      if (!document.getElementById('videoPlayer')?.src) throw new Error('MiniMax H3 no obtuvo GPU después de 5 minutos. La cola de ZeroGPU está saturada. Inténtalo de nuevo más tarde.');
+      if (!completed) throw new Error('MiniMax H3 no obtuvo GPU después de 5 minutos. La cola de ZeroGPU está saturada. Inténtalo de nuevo más tarde.');
     } catch(error) {
       showError('Error de generación: '+(error?.message || String(error)));
       if(status) status.textContent='Error';
