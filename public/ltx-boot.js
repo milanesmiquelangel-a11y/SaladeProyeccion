@@ -127,4 +127,14 @@
 
   window.startLtxGeneration = generate;
   window.startSalaGeneration = generate;
+  window.ltxBootReady = true;
+
+  // Independent click path: LTX must remain callable even if the main app script
+  // fails to initialize. The button is disabled immediately, so a second handler
+  // cannot start a duplicate generation.
+  button.addEventListener('click', (event) => {
+    if (($('videoProvider')?.value || 'ltx') !== 'ltx') return;
+    if (button.disabled) return;
+    generate(event);
+  });
 })();
