@@ -319,6 +319,10 @@ form?.addEventListener('submit', startGeneration);
 
 async function startGeneration(event) {
   if (event) event.preventDefault();
+  if (generateBtn?.disabled) return;
+  if (selectedProvider() === 'ltx' && window.startLtxGeneration) {
+    return window.startLtxGeneration(event);
+  }
   if (selectedProvider() === 'h3' && window.startH3Generation && !generateBtn?.disabled) {
     return window.startH3Generation(event);
   }
