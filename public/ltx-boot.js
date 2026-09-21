@@ -110,6 +110,7 @@
         seed,
         true,
         3.0,
+        true,
         false
       ]);
 
