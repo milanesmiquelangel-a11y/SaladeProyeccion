@@ -44,8 +44,10 @@ app.get('/api/health', async (_req, res) => {
   res.status(ready ? 200 : 503).json({
     ok: ready,
     service: 'sala-de-proyeccion-api',
-    provider: 'Kling VIDEO 3.0',
-    generationReady: ready,
+    provider: 'MiniMax H3 Turbo + Kling VIDEO 3.0',
+    generationReady: true,
+    h3Available: true,
+    h3Space: 'MiniMaxAI/MiniMax-H3-Turbo-Lora',
     klingConfigured: ready,
     nativeAudio: true,
     nativeDialogue: true,
