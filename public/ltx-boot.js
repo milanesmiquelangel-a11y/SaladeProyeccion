@@ -15,15 +15,9 @@
   }
 
   async function findEndpoint(client) {
-    try {
-      const info = await client.view_api({all_endpoints:true, print_info:false});
-      const named = Object.keys(info?.named_endpoints || {});
-      const unnamed = Object.keys(info?.unnamed_endpoints || {});
-      const all = [...named, ...unnamed];
-      const preferred = all.find(x => /generate/i.test(x)) || all.find(x => x !== '/js_fn');
-      if (preferred) return preferred;
-    } catch (_) {}
-    return '/generate';
+    // The official Lightricks Space exposes this named API endpoint.
+    // Use it directly instead of guessing from View API output.
+    return '/text_to_video';
   }
 
   function videoUrl(v) {
@@ -71,9 +65,19 @@
       const frames = Math.max(9, Math.min(257, Math.round(duration*30/8)*8+1));
 
       const result = await client.predict(endpoint, [
-        prompt, negative, image, null,
-        dims[0], dims[1], first ? 'image-to-video' : 'text-to-video', duration, frames,
-        seed, true, 3.0, false
+        prompt,
+        negative,
+        image,
+        null,
+        dims[0],
+        dims[1],
+        first ? 'image-to-video' : 'text-to-video',
+        duration,
+        frames,
+        seed,
+        true,
+        3.0,
+        false
       ]);
 
       const data = result?.data || result || [];
@@ -89,7 +93,9 @@
     } catch (e) {
       $('loadingState')?.classList.add('hidden');
       if($('statusText')) $('statusText').textContent='Error';
-      showError('Error de generación LTX Video: ' + (e?.message || String(e)));
+      const raw = e?.message || String(e);
+      const details = e?.cause?.message ? ` | ${e.cause.message}` : '';
+      showError('Error de generación LTX Video: ' + raw + details);
     } finally {
       button.disabled=false;
       button.textContent=old;
