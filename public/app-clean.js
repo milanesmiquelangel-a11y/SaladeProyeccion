@@ -46,7 +46,7 @@ let activeProject = null;
 let h3ClientPromise = null;
 let h3Submission = null;
 const H3_SPACE = 'MiniMaxAI/MiniMax-H3-Turbo-Lora';
-const H3_CANVAS = { '16:9': '1344x768 · 16:9 full', '9:16': '768x1344 · 9:16 full', '1:1': '768x768 · 1:1 full' };
+const H3_CANVAS = { '16:9': '960x544 · 16:9 fast', '9:16': '544x960 · 9:16 fast', '1:1': '544x544 · 1:1 fast' };
 const H3_LANGUAGE_NAMES = { en:'English', es:'Spanish', ru:'Russian', kk:'Kazakh', fr:'French', de:'German', it:'Italian', pt:'Portuguese', ar:'Arabic', ja:'Japanese', ko:'Korean', 'zh-CN':'Chinese' };
 
 function selectedProvider() { return videoProviderInput?.value || 'h3'; }
@@ -101,12 +101,12 @@ async function generateWithH3({ prompt, audioText, audioLanguage, aspect, durati
   const first = firstFile ? handle_file(firstFile) : null;
   const last = lastFile ? handle_file(lastFile) : null;
   const canvas = H3_CANVAS[aspect] || H3_CANVAS['16:9'];
-  const safeDuration = Math.max(5, Math.min(15, Number(duration) || 5));
-  const seed = Math.floor(Math.random() * 2147483647);
+  const safeDuration = Math.max(2, Math.min(14, Number(duration) || 5));
+  const seed = Math.floor(Math.random() * 2147483647);\n  // Render is a custom frontend, so the HF iframe ZeroGPU identity header is unavailable. Keep anonymous H3 requests within the 120-second xlarge reservation ceiling.\n  const steps = 2;
   const promptText = buildH3Prompt(prompt, audioText, audioLanguage);
   setLoading('MiniMax H3 en cola…', 'Esperando GPU gratuita de ZeroGPU…');
   const result = await client.predict('/output_video', [
-    promptText, first, last, canvas, safeDuration, 4, seed, false, 'larry'
+    promptText, first, last, canvas, safeDuration, steps, seed, false, 'larry'
   ]);
   let data = result?.data || result || [];
   if (data.length === 1 && Array.isArray(data[0])) data = data[0];
