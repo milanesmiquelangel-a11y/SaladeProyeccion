@@ -51,7 +51,8 @@ const H3_LANGUAGE_NAMES = { en:'English', es:'Spanish', ru:'Russian', kk:'Kazakh
 
 function selectedProvider() { return videoProviderInput?.value || 'h3'; }
 function updateProviderUi() {
-  const h3 = selectedProvider() === 'h3';\n  const ltx = selectedProvider() === 'ltx';
+  const h3 = selectedProvider() === 'h3';
+  const ltx = selectedProvider() === 'ltx';
   if (h3FramesPanel) h3FramesPanel.classList.toggle('hidden', !h3 && !ltx);
   if (providerHint) providerHint.textContent = h3
     ? 'MiniMax H3 runs directly from this page through the official Hugging Face Space. Free ZeroGPU has daily quotas and may queue when busy.'
