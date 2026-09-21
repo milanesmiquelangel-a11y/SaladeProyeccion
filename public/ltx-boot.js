@@ -22,9 +22,30 @@
 
   function videoUrl(v) {
     if (!v) return '';
-    if (typeof v === 'string') return v.startsWith('http') ? v : 'https://huggingface.co/spaces/' + SPACE + '/gradio_api/file=' + v;
-    if (v.url) return v.url.startsWith('http') ? v.url : 'https://huggingface.co/spaces/' + SPACE + '/gradio_api/file=' + v.url.replace(/^\//,'');
-    if (v.path) return 'https://huggingface.co/spaces/' + SPACE + '/gradio_api/file=' + v.path;
+    if (typeof v === 'string') {
+      if (v.startsWith('http')) return v;
+      return 'https://huggingface.co/spaces/' + SPACE + '/gradio_api/file=' + v.replace(/^\\//, '');
+    }
+    if (Array.isArray(v)) {
+      for (const item of v) {
+        const found = videoUrl(item);
+        if (found) return found;
+      }
+      return '';
+    }
+    if (typeof v === 'object') {
+      if (typeof v.url === 'string' && v.url) return v.url;
+      if (typeof v.path === 'string' && v.path) {
+        if (v.path.startsWith('http')) return v.path;
+        return 'https://huggingface.co/spaces/' + SPACE + '/gradio_api/file=' + v.path.replace(/^\\//, '');
+      }
+      for (const key of ['video','output','value','file','data']) {
+        if (v[key]) {
+          const found = videoUrl(v[key]);
+          if (found) return found;
+        }
+      }
+    }
     return '';
   }
 
@@ -80,10 +101,12 @@
         false
       ]);
 
-      const data = result?.data || result || [];
-      const video = Array.isArray(data) ? data[0] : data;
-      const url = videoUrl(video);
-      if (!url) throw new Error('LTX terminó sin devolver un vídeo.');
+      const data = result?.data ?? result ?? [];
+      const url = videoUrl(data);
+      if (!url) {
+        const shape = Array.isArray(data) ? data.map(x => typeof x).join(',') : typeof data;
+        throw new Error('LTX terminó sin devolver un vídeo. Respuesta recibida: ' + shape);
+      }
       const player = $('videoPlayer');
       if (player) { player.src=url; player.classList.remove('hidden'); player.load(); }
       const link=$('videoLink');
