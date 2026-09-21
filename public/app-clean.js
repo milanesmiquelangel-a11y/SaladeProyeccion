@@ -88,7 +88,7 @@ async function getH3Client() {
 function h3VideoUrl(video) {
   if (!video) return '';
   if (typeof video === 'string') return video.startsWith('http') ? video : `https://huggingface.co/spaces/${H3_SPACE}/gradio_api/file=${video}`;
-  if (video.url) return video.url;
+  if (video.url) return /^https?:\\/\\//i.test(video.url) ? video.url : `https://huggingface.co/spaces/${H3_SPACE}/gradio_api/file=${video.url.replace(/^\\//, '')}`;
   if (video.path) return `https://huggingface.co/spaces/${H3_SPACE}/gradio_api/file=${video.path}`;
   return '';
 }
