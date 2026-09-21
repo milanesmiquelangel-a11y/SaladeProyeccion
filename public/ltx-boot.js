@@ -3,7 +3,7 @@
   const button = $('generateBtn');
   if (!button) return;
 
-  const SPACE = 'Lightricks/ltx-video-distilled';
+  const SPACE = 'DeepRat/LTX-Video-ZeroGPU-Optimized';
   let clientPromise = null;
   const HF_TOKEN_KEY = 'sala_hf_token';
 
@@ -12,7 +12,7 @@
       clientPromise = import('https://cdn.jsdelivr.net/npm/@gradio/client@2.7.0/dist/index.min.js')
         .then(({Client}) => {
           const token = localStorage.getItem(HF_TOKEN_KEY) || '';
-          const options = {events:['data','status']};
+          const options = {events:['data','status'], status_callback: (s) => {\n            const msg = s?.message || s?.detail || s?.stage || '';\n            if ($('loadingDetail') && msg) $('loadingDetail').textContent = 'ZeroGPU: ' + msg;\n          }};
           if (token) options.token = token;
           return Client.connect(SPACE, options);
         });
@@ -125,7 +125,7 @@
       const raw = e?.message || String(e);
       const details = e?.cause?.message ? ` | ${e.cause.message}` : '';
       if (/ZeroGPU quota|quota exceeded|requested vs\./i.test(raw)) {
-        showError('LTX ZeroGPU: la cuenta anónima no tiene suficiente cuota para esta generación. Autentica Hugging Face en Ajustes con un token gratuito para disponer de más cuota, o espera al reinicio indicado por Hugging Face. No es un fallo del botón.');
+        showError('LTX ZeroGPU: Hugging Face no pudo reservar la GPU o la cuota disponible es insuficiente. Comprueba el token gratuito en Ajustes y vuelve a intentarlo más tarde.');
       } else {
         showError('Error de generación LTX Video: ' + raw + details);
       }
