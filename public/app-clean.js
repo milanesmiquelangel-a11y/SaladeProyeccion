@@ -330,8 +330,11 @@ window.startSalaGeneration = startGeneration;
 form?.addEventListener('submit', startGeneration);
 
 async function startGeneration(event) {
-  if (generateBtn?.disabled) return;
   if (event) event.preventDefault();
+  if (selectedProvider() === 'h3' && window.startH3Generation && !generateBtn?.disabled) {
+    return window.startH3Generation(event);
+  }
+  if (generateBtn?.disabled) return;
   clearError(); clearTimeout(pollTimer);
   const prompt = promptInput.value.trim();
   if (!prompt) return showError('Escribe una descripción de la escena.');
