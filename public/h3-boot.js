@@ -51,7 +51,7 @@
         : prompt;
       const aspect=$('aspect')?.value || '16:9';
       const canvas={'16:9':'1344x768 · 16:9 full','9:16':'768x1344 · 9:16 full','1:1':'768x768 · 1:1 full'}[aspect] || '1344x768 · 16:9 full';
-      const duration=Math.max(2,Math.min(14,Number($('duration')?.value)||5));
+      const duration=Math.max(5,Math.min(15,Number($('duration')?.value)||5));
       const first=$('h3FirstFrame')?.files?.[0];
       const last=$('h3LastFrame')?.files?.[0];
       const payload={
@@ -60,22 +60,38 @@
         last_image: last ? handle_file(last) : null,
         canvas,
         duration,
-        steps: 6,
+        steps: 4,
         seed: Math.floor(Math.random()*2147483647),
         upsample: false,
         lora: 'larry'
       };
       setLoading('MiniMax H3 en cola…','Esperando GPU gratuita de ZeroGPU.');
-      const job=client.submit('/predict_fn_generate_video', [payload.prompt, payload.image, payload.last_image, payload.canvas, payload.duration, payload.steps, payload.seed, payload.upsample, payload.lora]);
-      let completed=false;
+      // Official current H3 API: /generate with a named-object payload.
+      // The Space's current frontend uses client.predict('/generate', {...}).
+      const job=client.predict('/generate', {
+        prompt: payload.prompt,
+        image_path: payload.image,
+        last_image_path: payload.last_image,
+        canvas: payload.canvas,
+        duration: payload.duration,
+        steps: payload.steps,
+        seed: payload.seed,
+        upsample: payload.upsample,
+        use_lora: true
+      });
       const startedAt=Date.now();
-      const queueWatch=setInterval(() => {
-        const elapsed=Math.floor((Date.now()-startedAt)/1000);
-        if (elapsed < 60) setLoading('MiniMax H3 en cola…',`Esperando GPU gratuita de ZeroGPU · ${elapsed} s.`);
-        else setLoading('MiniMax H3 en cola…',`La GPU todavía no está disponible · ${Math.floor(elapsed/60)} min ${elapsed%60} s.`);
-      },15000);
-      const timeout=setTimeout(() => { try { job.cancel(); } catch (_) {} },300000);
-      try {
+      setLoading('MiniMax H3 en cola…','Solicitud enviada al API oficial de H3. Esperando GPU gratuita de ZeroGPU…');
+      const result=await job;
+      const elapsed=Math.floor((Date.now()-startedAt)/1000);
+      setLoading('MiniMax H3 procesado…',`Respuesta recibida en ${elapsed} s.`);
+      let data=result?.data || [];
+      if(data.length===1 && Array.isArray(data[0])) data=data[0];
+      const video=data[0];
+      const url=typeof video==='string' ? video : (video?.url || (video?.path ? 'https://huggingface.co/spaces/MiniMaxAI/MiniMax-H3-Turbo-Lora/gradio_api/file='+video.path : ''));
+      if(!url) throw new Error('MiniMax H3 terminó pero no devolvió el vídeo.');
+      showVideo(url);
+      return;
+      /* Legacy workflow event stream retained only as unreachable reference.
         for await (const msg of job) {
           if(msg.type==='data'){
             const data=msg.data || [];
@@ -87,10 +103,7 @@
             break;
           }
         }
-      } finally {
-        clearInterval(queueWatch); clearTimeout(timeout);
-      }
-      if (!completed) throw new Error('MiniMax H3 no obtuvo GPU después de 5 minutos. La cola de ZeroGPU está saturada. Inténtalo de nuevo más tarde.');
+      } */
     } catch(error) {
       showError('Error de generación: '+(error?.message || String(error)));
       if(status) status.textContent='Error';
