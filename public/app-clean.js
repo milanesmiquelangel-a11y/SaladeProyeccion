@@ -51,12 +51,12 @@ const H3_LANGUAGE_NAMES = { en:'English', es:'Spanish', ru:'Russian', kk:'Kazakh
 
 function selectedProvider() { return videoProviderInput?.value || 'h3'; }
 function updateProviderUi() {
-  const h3 = selectedProvider() === 'h3';
-  if (h3FramesPanel) h3FramesPanel.classList.toggle('hidden', !h3);
+  const h3 = selectedProvider() === 'h3';\n  const ltx = selectedProvider() === 'ltx';
+  if (h3FramesPanel) h3FramesPanel.classList.toggle('hidden', !h3 && !ltx);
   if (providerHint) providerHint.textContent = h3
     ? 'MiniMax H3 runs directly from this page through the official Hugging Face Space. Free ZeroGPU has daily quotas and may queue when busy.'
-    : 'Kling VIDEO 3.0 uses the configured API on Render and requires an available Kling balance.';
-  if (generateBtn) generateBtn.textContent = h3 ? 'Generate with MiniMax H3' : 'Generate with Kling';
+    : ltx ? 'LTX Video 0.9.8 runs directly through the official Lightricks Hugging Face Space using free ZeroGPU.' : 'Kling VIDEO 3.0 uses the configured API on Render and requires an available Kling balance.';
+  if (generateBtn) generateBtn.textContent = h3 ? 'Generate with MiniMax H3' : (ltx ? 'Generate with LTX Video' : 'Generate with Kling');
 }
 
 function buildH3Prompt(scene, dialogue, language) {
