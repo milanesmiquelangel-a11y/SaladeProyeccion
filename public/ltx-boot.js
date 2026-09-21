@@ -12,7 +12,13 @@
       clientPromise = import('https://cdn.jsdelivr.net/npm/@gradio/client@2.7.0/dist/index.min.js')
         .then(({Client}) => {
           const token = localStorage.getItem(HF_TOKEN_KEY) || '';
-          const options = {events:['data','status'], status_callback: (s) => {\n            const msg = s?.message || s?.detail || s?.stage || '';\n            if ($('loadingDetail') && msg) $('loadingDetail').textContent = 'ZeroGPU: ' + msg;\n          }};
+          const options = {
+            events: ['data', 'status'],
+            status_callback: (s) => {
+              const msg = s?.message || s?.detail || s?.stage || '';
+              if ($('loadingDetail') && msg) $('loadingDetail').textContent = 'ZeroGPU: ' + msg;
+            }
+          };
           if (token) options.token = token;
           return Client.connect(SPACE, options);
         });
@@ -21,7 +27,7 @@
   }
 
   async function findEndpoint(client) {
-    // The official Lightricks Space exposes this named API endpoint.
+    // The optimized LTX Space exposes this named API endpoint.
     // Use it directly instead of guessing from View API output.
     return '/text_to_video';
   }
