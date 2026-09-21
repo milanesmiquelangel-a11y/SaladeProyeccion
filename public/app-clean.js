@@ -326,7 +326,7 @@ window.addEventListener('unhandledrejection', (event) => {
   if (reason) showError(`Error de la interfaz: ${reason.message || reason}`);
 });
 
-generateBtn?.addEventListener('click', startGeneration);
+window.startSalaGeneration = startGeneration;
 form?.addEventListener('submit', startGeneration);
 
 async function startGeneration(event) {
