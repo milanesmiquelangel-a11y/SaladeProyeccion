@@ -37,10 +37,10 @@
   async function generate(event) {
     event?.preventDefault();
     if (button.disabled) return;
-    const prompt = ($('prompt')?.value || '').trim();
+    let prompt = ($('prompt')?.value || '').trim();
     const errorBox = $('errorBox');
     const showError = m => { if(errorBox){errorBox.textContent=m;errorBox.classList.remove('hidden');} };
-    if (!prompt) return showError('Escribe una descripción de la escena.');
+    const dialogue = ($('audioText')?.value || '').trim();\n    const lang = $('audioLanguage')?.selectedOptions?.[0]?.textContent || 'English';\n    if (dialogue) prompt += `\\n\\nA visible character speaks on camera in ${lang}. Exact dialogue: "${dialogue}". Show natural facial expressions and mouth movement while speaking.`;\n    if (!prompt) return showError('Escribe una descripción de la escena.');
 
     button.disabled = true;
     const old = button.textContent;
@@ -70,7 +70,7 @@
 
       const result = await client.predict(endpoint, [
         prompt, negative, image, null,
-        dims[0], dims[1], 'text-to-video', duration, frames,
+        dims[0], dims[1], first ? 'image-to-video' : 'text-to-video', duration, frames,
         seed, true, 3.0, false
       ]);
 
