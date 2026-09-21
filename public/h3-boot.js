@@ -63,7 +63,7 @@
         seed: Math.floor(Math.random()*2147483647)
       };
       setLoading('MiniMax H3 en cola…','Esperando GPU gratuita de ZeroGPU.');
-      const job=client.submit('/generate',payload);
+      const job=client.submit('/predict_fn_generate_video', [payload.prompt, payload.image, payload.last_image, payload.canvas, payload.duration, payload.steps, payload.seed, payload.upsample, payload.lora]);
       for await (const msg of job) {
         if(msg.type==='status'){
           if(msg.stage==='pending') setLoading('MiniMax H3 en cola…',msg.position!=null?'Posición '+(msg.position+1)+'.':'Esperando GPU gratuita.');
