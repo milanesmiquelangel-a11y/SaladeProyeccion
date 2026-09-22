@@ -68,6 +68,11 @@
     const errorBox = $('errorBox');
     const showError = m => { if(errorBox){errorBox.textContent=m;errorBox.classList.remove('hidden');} };
     const dialogue = ($('audioText')?.value || '').trim();
+    if (dialogue) {
+      // LTX is video-only. Never spend LTX ZeroGPU quota on a dialogue request.
+      if (window.startH3Generation) return window.startH3Generation(event);
+      return showError('El diálogo sincronizado requiere MiniMax H3; LTX no genera audio nativo.');
+    }
     const lang = $('audioLanguage')?.selectedOptions?.[0]?.textContent || 'English';
     if (dialogue) prompt += `\n\nA visible character speaks on camera in ${lang}. Exact dialogue: "${dialogue}". Show natural facial expressions and mouth movement while speaking.`;
     if (!prompt) return showError('Escribe una descripción de la escena.');
