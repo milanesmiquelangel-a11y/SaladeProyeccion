@@ -87,9 +87,9 @@
       const aspect = $('aspect')?.value || '16:9';
       // Match the Space's documented ZeroGPU smart presets instead of
       // requesting the same resolution for every duration.
-      const baseDims = duration <= 2.5 ? [704,960]
-        : duration <= 3.5 ? [640,832]
-        : duration <= 4.5 ? [576,768]
+      const baseDims = duration <= 2.0 ? [384,512]
+        : duration <= 3.0 ? [480,640]
+        : duration <= 4.0 ? [480,640]
         : duration <= 6.0 ? [480,640]
         : duration <= 7.5 ? [416,544]
         : [384,512];
