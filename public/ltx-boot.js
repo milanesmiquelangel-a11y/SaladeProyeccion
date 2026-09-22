@@ -138,11 +138,18 @@
       $('loadingState')?.classList.add('hidden');
       if($('statusText')) $('statusText').textContent='Error';
       const raw = e?.message || String(e);
-      const details = e?.cause?.message ? ` | ${e.cause.message}` : '';
+      const detailParts = [
+        e?.cause?.message,
+        e?.detail,
+        e?.description,
+        typeof e?.error === 'string' ? e.error : '',
+        typeof e?.data?.error === 'string' ? e.data.error : ''
+      ].filter(Boolean);
+      const details = detailParts.length ? ` | ${detailParts.join(' | ')}` : '';
       if (/ZeroGPU quota|quota exceeded|requested vs\./i.test(raw)) {
-        showError('LTX ZeroGPU: la cuota de Hugging Face es insuficiente para esta generación. El vídeo usa ahora una configuración de reserva reducida.');
+        showError('LTX ZeroGPU: cuota insuficiente. Detalles: ' + (raw + details));
       } else if (/No GPU was available|GPU was not available|queue timeout|Waiting for a GPU/i.test(raw)) {
-        showError('LTX ZeroGPU: Hugging Face no asignó una GPU dentro del tiempo de espera. No es un error de Kling ni del botón. La cola de ZeroGPU está rechazando temporalmente la solicitud.');
+        showError('LTX ZeroGPU: no se asignó una GPU a tiempo. Detalles: ' + (raw + details));
       } else {
         showError('Error de generación LTX Video: ' + raw + details);
       }
