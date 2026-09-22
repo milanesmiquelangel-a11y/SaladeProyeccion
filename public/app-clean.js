@@ -81,7 +81,12 @@ function buildH3Prompt(scene, dialogue, language) {
 async function getH3Client() {
   if (!h3ClientPromise) {
     h3ClientPromise = import('https://cdn.jsdelivr.net/npm/@gradio/client@2.7.0/dist/index.min.js')
-      .then(({ Client }) => Client.connect(H3_SPACE, { events: ['data', 'status'] }));
+      .then(({ Client }) => {
+        const token = localStorage.getItem('sala_hf_token') || '';
+        const options = { events: ['data', 'status'] };
+        if (token) options.token = token;
+        return Client.connect(H3_SPACE, options);
+      });
   }
   return h3ClientPromise;
 }
@@ -105,7 +110,7 @@ async function generateWithH3({ prompt, audioText, audioLanguage, aspect, durati
   const safeDuration = Math.max(2, Math.min(14, Number(duration) || 5));
   const seed = Math.floor(Math.random() * 2147483647);
   // Render is a custom frontend, so the HF iframe ZeroGPU identity header is unavailable. Keep anonymous H3 requests within the 120-second xlarge reservation ceiling.
-  const steps = 2;
+  const steps = 4;
   const promptText = buildH3Prompt(prompt, audioText, audioLanguage);
   setLoading('MiniMax H3 en cola…', 'Esperando GPU gratuita de ZeroGPU…');
   const result = await client.predict('/output_video', [
@@ -323,8 +328,15 @@ async function startGeneration(event) {
   if (event) event.preventDefault();
   if (generateBtn?.disabled) return;
   if (selectedProvider() === 'ltx') {
+    const dialogue = audioTextInput?.value.trim() || '';
+    if (dialogue) {
+      // LTX is a video-only engine. Never spend LTX ZeroGPU quota on a request
+      // that asks for synchronized dialogue; H3 is the native audiovisual path.
+      if (window.startH3Generation) return window.startH3Generation(event);
+      return showError('Para generar diálogo sincronizado, MiniMax H3 debe estar disponible. LTX no genera audio nativo.');
+    }
     if (window.startLtxGeneration) return window.startLtxGeneration(event);
-    return showError('El generador LTX no está cargado. No se enviará ninguna solicitud a Kling.');
+    return showError('El generador LTX no está cargado.');
   }
   if (selectedProvider() === 'h3' && window.startH3Generation && !generateBtn?.disabled) {
     return window.startH3Generation(event);
