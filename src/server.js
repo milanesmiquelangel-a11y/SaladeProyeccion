@@ -37,6 +37,19 @@ app.get('/', async (_req, res) => {
         res.type('html').send(html);
   } catch { res.sendFile(path.join(publicDir, 'index.html')); }
 });
+
+// Serve crawler files explicitly so the production host always exposes the
+// intended crawl policy and sitemap, independently of static-file handling.
+app.get('/robots.txt', (_req, res) => {
+  res.type('text/plain').set('Cache-Control', 'no-store').send(
+    'User-agent: *\\nAllow: /\\n\\nSitemap: https://sala-de-proyeccion.onrender.com/sitemap.xml\\n'
+  );
+});
+
+app.get('/sitemap.xml', (_req, res) => {
+  res.type('application/xml').sendFile(path.join(publicDir, 'sitemap.xml'));
+});
+
 app.use(express.static(publicDir));
 
 app.get('/api/health', async (_req, res) => {
