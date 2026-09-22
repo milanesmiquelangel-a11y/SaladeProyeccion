@@ -85,11 +85,19 @@
       const endpoint = await findEndpoint(client);
       const duration = Math.max(0.3, Math.min(8.5, Number($('duration')?.value) || 2));
       const aspect = $('aspect')?.value || '16:9';
-      const dims = {
-        '16:9':[512,768],
-        '9:16':[768,512],
-        '1:1':[512,512]
-      }[aspect] || [512,768];
+      // Match the Space's documented ZeroGPU smart presets instead of
+      // requesting the same resolution for every duration.
+      const baseDims = duration <= 2.5 ? [704,960]
+        : duration <= 3.5 ? [640,832]
+        : duration <= 4.5 ? [576,768]
+        : duration <= 6.0 ? [480,640]
+        : duration <= 7.5 ? [416,544]
+        : [384,512];
+      const dims = aspect === '9:16'
+        ? [baseDims[1], baseDims[0]]
+        : aspect === '1:1'
+          ? [Math.min(baseDims[0], baseDims[1]), Math.min(baseDims[0], baseDims[1])]
+          : baseDims;
       const negative = ($('negative')?.value || 'worst quality, inconsistent motion, blurry, jittery, distorted').trim();
       const seed = Math.floor(Math.random()*4294967295);
       const first = $('h3FirstFrame')?.files?.[0] || null;
@@ -131,8 +139,10 @@
       if($('statusText')) $('statusText').textContent='Error';
       const raw = e?.message || String(e);
       const details = e?.cause?.message ? ` | ${e.cause.message}` : '';
-      if (/ZeroGPU quota|quota exceeded|requested vs\.|No GPU was available|GPU was not available/i.test(raw)) {
-        showError('LTX ZeroGPU: Hugging Face no pudo reservar una GPU para esta solicitud. La configuración ahora usa un solo pase para reducir la reserva; si la cola está saturada, inténtalo de nuevo más tarde.');
+      if (/ZeroGPU quota|quota exceeded|requested vs\./i.test(raw)) {
+        showError('LTX ZeroGPU: la cuota de Hugging Face es insuficiente para esta generación. El vídeo usa ahora una configuración de reserva reducida.');
+      } else if (/No GPU was available|GPU was not available|queue timeout|Waiting for a GPU/i.test(raw)) {
+        showError('LTX ZeroGPU: Hugging Face no asignó una GPU dentro del tiempo de espera. No es un error de Kling ni del botón. La cola de ZeroGPU está rechazando temporalmente la solicitud.');
       } else {
         showError('Error de generación LTX Video: ' + raw + details);
       }
