@@ -77,7 +77,7 @@
     $('emptyState')?.classList.add('hidden');
     $('loadingState')?.classList.remove('hidden');
     if ($('loadingTitle')) $('loadingTitle').textContent = 'LTX Video 0.9.8 en cola…';
-    if ($('loadingDetail')) $('loadingDetail').textContent = 'Generación gratuita mediante el Space oficial de Lightricks.';
+    if ($('loadingDetail')) $('loadingDetail').textContent = 'Generación gratuita mediante Hugging Face ZeroGPU (LTX optimizado).';
     if ($('statusText')) $('statusText').textContent = 'Procesando';
 
     try {
@@ -110,7 +110,7 @@
         seed,
         true,
         3.0,
-        true,
+        false,
         false
       ]);
 
@@ -131,8 +131,8 @@
       if($('statusText')) $('statusText').textContent='Error';
       const raw = e?.message || String(e);
       const details = e?.cause?.message ? ` | ${e.cause.message}` : '';
-      if (/ZeroGPU quota|quota exceeded|requested vs\./i.test(raw)) {
-        showError('LTX ZeroGPU: Hugging Face no pudo reservar la GPU o la cuota disponible es insuficiente. Comprueba el token gratuito en Ajustes y vuelve a intentarlo más tarde.');
+      if (/ZeroGPU quota|quota exceeded|requested vs\.|No GPU was available|GPU was not available/i.test(raw)) {
+        showError('LTX ZeroGPU: Hugging Face no pudo reservar una GPU para esta solicitud. La configuración ahora usa un solo pase para reducir la reserva; si la cola está saturada, inténtalo de nuevo más tarde.');
       } else {
         showError('Error de generación LTX Video: ' + raw + details);
       }
