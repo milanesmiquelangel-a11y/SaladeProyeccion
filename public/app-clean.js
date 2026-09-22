@@ -45,7 +45,7 @@ let activeJobId = null;
 let activeProject = null;
 let h3ClientPromise = null;
 let h3Submission = null;
-const H3_SPACE = 'MiniMaxAI/MiniMax-H3-Turbo-Lora';
+const H3_SPACE = 'mrfakename/minimax-h3-ultra-fast';
 const H3_CANVAS = { '16:9': '960x544 · 16:9 fast', '9:16': '544x960 · 9:16 fast', '1:1': '544x544 · 1:1 fast' };
 const H3_LANGUAGE_NAMES = { en:'English', es:'Spanish', ru:'Russian', kk:'Kazakh', fr:'French', de:'German', it:'Italian', pt:'Portuguese', ar:'Arabic', ja:'Japanese', ko:'Korean', 'zh-CN':'Chinese' };
 
@@ -55,7 +55,7 @@ function updateProviderUi() {
   const ltx = selectedProvider() === 'ltx';
   if (h3FramesPanel) h3FramesPanel.classList.toggle('hidden', !h3 && !ltx);
   if (providerHint) providerHint.textContent = h3
-    ? 'MiniMax H3 runs directly from this page through the official Hugging Face Space. Free ZeroGPU has daily quotas and may queue when busy.'
+    ? 'MiniMax MiniMax H3 Ultra Fast runs directly through Hugging Face ZeroGPU with native synchronized audio. It uses an optimized NVFP4 engine.'
     : ltx ? 'LTX Video 0.9.8 runs directly through the official Lightricks Hugging Face Space using free ZeroGPU.' : 'Kling VIDEO 3.0 uses the configured API on Render and requires an available Kling balance.';
   if (generateBtn) generateBtn.textContent = h3 ? 'Generate with MiniMax H3' : (ltx ? 'Generate with LTX Video' : 'Generate with Kling');
 }
@@ -109,19 +109,34 @@ async function generateWithH3({ prompt, audioText, audioLanguage, aspect, durati
   const canvas = H3_CANVAS[aspect] || H3_CANVAS['16:9'];
   const safeDuration = Math.max(2, Math.min(14, Number(duration) || 5));
   const seed = Math.floor(Math.random() * 2147483647);
-  // Render is a custom frontend, so the HF iframe ZeroGPU identity header is unavailable. Keep anonymous H3 requests within the 120-second xlarge reservation ceiling.
   const steps = 4;
   const promptText = buildH3Prompt(prompt, audioText, audioLanguage);
-  setLoading('MiniMax H3 en cola…', 'Esperando GPU gratuita de ZeroGPU…');
-  const result = await client.predict('/output_video', [
-    promptText, first, last, canvas, safeDuration, steps, seed, false, 'larry'
+  setLoading('MiniMax H3 Ultra Fast en cola…', 'Esperando GPU gratuita de ZeroGPU…');
+  // Current Ultra Fast Space API: /generate. Turbo 4-step is selected by the generation preset.
+  const result = await client.predict('/generate', [
+    promptText,
+    first,
+    last,
+    canvas,
+    safeDuration,
+    steps,
+    seed,
+    false,
+    'Exact',
+    'Turbo · 4 steps',
+    '',
+    '',
+    1.0,
+    'Turbo 4-step — fastest, more artifacts',
+    null,
+    null
   ]);
   let data = result?.data || result || [];
   if (data.length === 1 && Array.isArray(data[0])) data = data[0];
   const [video, report, refined] = data;
   const url = h3VideoUrl(video);
-  if (!url) throw new Error('MiniMax H3 terminó pero no devolvió una referencia de vídeo.');
-  return { url, report: report || 'MiniMax H3 · vídeo + audio sincronizados', refined: refined || '' };
+  if (!url) throw new Error('MiniMax H3 Ultra Fast terminó pero no devolvió una referencia de vídeo.');
+  return { url, report: report || 'MiniMax H3 Ultra Fast · vídeo + audio sincronizados', refined: refined || '' };
 }
 const TIMEOUT = 20 * 60 * 1000;
 
