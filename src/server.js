@@ -1,5 +1,6 @@
 import 'dotenv/config';
 import './auth-bridge.js';
+import './admin-bootstrap.js';
 import express from 'express';
 import cors from 'cors';
 import path from 'node:path';
