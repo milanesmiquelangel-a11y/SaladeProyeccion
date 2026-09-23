@@ -8,7 +8,7 @@
   "scripts": {
     "start": "node src/server.js",
     "dev": "node --watch src/server.js",
-    "check": "node --check src/server.js && node --check src/kling-video-provider.js"
+    "check": "node --check src/server.js && node --check src/kling-video-provider.js && node --check src/free-video-providers.js && node --check src/wan-media-provider.js && node --check src/audio-api.js && node --check src/audio-tts.js"
   },
   "engines": {
     "node": ">=18.17"
