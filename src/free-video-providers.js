@@ -27,7 +27,7 @@ async function readJson(response) {
 export function freeProvidersConfigured() {
   return {
     seedance: Boolean(BYTEPLUS_KEY),
-    wan: Boolean(WAN_KEY)
+    wan: Boolean(WAN_KEY && WAN_WORKSPACE)
   };
 }
 
