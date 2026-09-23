@@ -43,101 +43,11 @@ const STORAGE = { projects: 'salaProjects', history: 'salaHistory', settings: 's
 let pollTimer = null;
 let activeJobId = null;
 let activeProject = null;
-let h3ClientPromise = null;
-let h3Submission = null;
-const H3_SPACE = 'mrfakename/minimax-h3-ultra-fast';
-const H3_CANVAS = { '16:9': '960x544 · 16:9 fast', '9:16': '544x960 · 9:16 fast', '1:1': '544x544 · 1:1 fast' };
-const H3_LANGUAGE_NAMES = { en:'English', es:'Spanish', ru:'Russian', kk:'Kazakh', fr:'French', de:'German', it:'Italian', pt:'Portuguese', ar:'Arabic', ja:'Japanese', ko:'Korean', 'zh-CN':'Chinese' };
-
-function selectedProvider() { return videoProviderInput?.value || 'h3'; }
-function updateProviderUi() {
-  const h3 = selectedProvider() === 'h3';
-  const ltx = selectedProvider() === 'ltx';
-  if (h3FramesPanel) h3FramesPanel.classList.toggle('hidden', !h3 && !ltx);
-  if (providerHint) providerHint.textContent = h3
-    ? 'MiniMax MiniMax H3 Ultra Fast runs directly through Hugging Face ZeroGPU with native synchronized audio. It uses an optimized NVFP4 engine.'
-    : ltx ? 'LTX Video 0.9.8 runs directly through the official Lightricks Hugging Face Space using free ZeroGPU.' : 'Kling VIDEO 3.0 uses the configured API on Render and requires an available Kling balance.';
-  if (generateBtn) generateBtn.textContent = h3 ? 'Generate with MiniMax H3' : (ltx ? 'Generate with LTX Video' : 'Generate with Kling');
-}
-
-function buildH3Prompt(scene, dialogue, language) {
-  const base = String(scene || '').trim();
-  const text = String(dialogue || '').trim();
-  if (!text) return base;
-  const lang = H3_LANGUAGE_NAMES[language] || language || 'English';
-  return [
-    'integrated_multimodal_description:',
-    '[Shot 1] ',
-    base,
-    'The visible speaking character is the source of the voice and remains clearly visible on camera. The character speaks physically with natural facial expressions, jaw and lip movements synchronized to every spoken word.',
-    `The character says exactly this dialogue: <d>[${lang}] ${text}</d>`,
-    'The mouth must not remain closed while the dialogue is heard. No off-screen narrator. After speaking, the character stops speaking and returns to natural facial motion.',
-    '',
-    'overall_soundscape: Natural environmental and action sounds matching the scene; dialogue remains clear and synchronized.',
-    'non_diegetic_music: N/A unless the scene description explicitly requests music.'
-  ].join('\n');
-}
-
-async function getH3Client() {
-  if (!h3ClientPromise) {
-    h3ClientPromise = import('https://cdn.jsdelivr.net/npm/@gradio/client@2.7.0/dist/index.min.js')
-      .then(({ Client }) => {
-        const token = localStorage.getItem('sala_hf_token') || '';
-        const options = { events: ['data', 'status'] };
-        if (token) options.token = token;
-        return Client.connect(H3_SPACE, options);
-      });
-  }
-  return h3ClientPromise;
-}
-
-function h3VideoUrl(video) {
-  if (!video) return '';
-  if (typeof video === 'string') return video.startsWith('http') ? video : `https://huggingface.co/spaces/${H3_SPACE}/gradio_api/file=${video}`;
-  if (video.url) return video.url.startsWith('http') ? video.url : `https://huggingface.co/spaces/${H3_SPACE}/gradio_api/file=${String(video.url).replace(/^\//, '')}`;
-  if (video.path) return `https://huggingface.co/spaces/${H3_SPACE}/gradio_api/file=${video.path}`;
-  return '';
-}
-
-async function generateWithH3({ prompt, audioText, audioLanguage, aspect, duration }) {
-  const client = await getH3Client();
-  const firstFile = h3FirstFrameInput?.files?.[0] || null;
-  const lastFile = h3LastFrameInput?.files?.[0] || null;
-  const { handle_file } = await import('https://cdn.jsdelivr.net/npm/@gradio/client@2.7.0/dist/index.min.js');
-  const first = firstFile ? handle_file(firstFile) : null;
-  const last = lastFile ? handle_file(lastFile) : null;
-  const canvas = H3_CANVAS[aspect] || H3_CANVAS['16:9'];
-  const safeDuration = Math.max(2, Math.min(14, Number(duration) || 5));
-  const seed = Math.floor(Math.random() * 2147483647);
-  const steps = 4;
-  const promptText = buildH3Prompt(prompt, audioText, audioLanguage);
-  setLoading('MiniMax H3 Ultra Fast en cola…', 'Esperando GPU gratuita de ZeroGPU…');
-  // Current Ultra Fast Space API: /generate. Turbo 4-step is selected by the generation preset.
-  const result = await client.predict('/generate', [
-    promptText,
-    first,
-    last,
-    canvas,
-    safeDuration,
-    steps,
-    seed,
-    false,
-    'Exact',
-    'Turbo · 4 steps',
-    '',
-    '',
-    1.0,
-    'Turbo 4-step — fastest, more artifacts',
-    null,
-    null
-  ]);
-  let data = result?.data || result || [];
-  if (data.length === 1 && Array.isArray(data[0])) data = data[0];
-  const [video, report, refined] = data;
-  const url = h3VideoUrl(video);
-  if (!url) throw new Error('MiniMax H3 Ultra Fast terminó pero no devolvió una referencia de vídeo.');
-  return { url, report: report || 'MiniMax H3 Ultra Fast · vídeo + audio sincronizados', refined: refined || '' };
-}
+const PROVIDERS = {
+  seedance: { label: 'Seedance 2.0 Fast — Free quota', nativeAudio: true },
+  wan: { label: 'Wan 2.7 — Free quota', nativeAudio: true },
+  kling: { label: 'Kling VIDEO 3.0 — API', nativeAudio: true }
+};
 const TIMEOUT = 20 * 60 * 1000;
 
 function read(key, fallback) { try { return JSON.parse(localStorage.getItem(key) || JSON.stringify(fallback)); } catch { return fallback; } }
@@ -303,7 +213,7 @@ async function poll(jobId, startedAt) {
     const response = await fetch(`/api/video/status/${encodeURIComponent(jobId)}`);
     const data = await response.json();
     if (!response.ok) throw new Error(data.error || 'No se pudo consultar el estado.');
-    setLoading('Generando con Kling VIDEO 3.0…', data.detail || `${data.providerState || 'Procesando'} · escena ${data.currentScene || 0}/${data.totalScenes || 1}`);
+    setLoading(`Generando con ${data.provider || 'video engine'}…`, data.detail || `${data.providerState || 'Procesando'}`);
     if (data.status === 'COMPLETED' && data.outputUrl) {
       showVideo(data.outputUrl);
       saveProject({ status: 'completado', url: data.outputUrl, requestId: jobId });
@@ -342,49 +252,39 @@ form?.addEventListener('submit', startGeneration);
 async function startGeneration(event) {
   if (event) event.preventDefault();
   if (generateBtn?.disabled) return;
-  if (selectedProvider() === 'ltx') {
-    const dialogue = audioTextInput?.value.trim() || '';
-    if (dialogue) {
-      // LTX is a video-only engine. Never spend LTX ZeroGPU quota on a request
-      // that asks for synchronized dialogue; H3 is the native audiovisual path.
-      if (window.startH3Generation) return window.startH3Generation(event);
-      return showError('Para generar diálogo sincronizado, MiniMax H3 debe estar disponible. LTX no genera audio nativo.');
-    }
-    if (window.startLtxGeneration) return window.startLtxGeneration(event);
-    return showError('El generador LTX no está cargado.');
-  }
-  if (selectedProvider() === 'h3' && window.startH3Generation && !generateBtn?.disabled) {
-    return window.startH3Generation(event);
-  }
-  if (generateBtn?.disabled) return;
   clearError(); clearTimeout(pollTimer);
   const prompt = promptInput.value.trim();
   if (!prompt) return showError('Escribe una descripción de la escena.');
   if (activeJobId) return;
-  const project = saveProject({ status: 'procesando', url: '', videoProvider: selectedProvider() });
-  saveHistory({ name: project.name, prompt: project.prompt, status: 'solicitud enviada', provider: selectedProvider() });
+  const provider = selectedProvider();
+  if (!PROVIDERS[provider]) return showError('Selecciona un motor de vídeo válido.');
+  const project = saveProject({ status: 'procesando', url: '', videoProvider: provider });
+  saveHistory({ name: project.name, prompt: project.prompt, status: 'solicitud enviada', provider });
   generateBtn.disabled = true; cancelBtn.disabled = false;
-  setLoading(selectedProvider() === 'h3' ? 'Preparando MiniMax H3…' : 'Preparando Kling VIDEO 3.0…', selectedProvider() === 'h3' ? 'Conectando directamente con Hugging Face ZeroGPU.' : 'Conectando con Kling VIDEO 3.0 Native Audio.');
+  setLoading(`Preparando ${PROVIDERS[provider].label}…`, 'Conectando con el motor de vídeo.');
   try {
-    if (selectedProvider() === 'h3') {
-      const result = await generateWithH3({ prompt, audioText: audioTextInput?.value.trim() || '', audioLanguage: audioLanguageInput?.value || 'en', aspect: aspectInput.value, duration: Number(durationInput.value) });
-      showVideo(result.url);
-      saveProject({ status: 'completado', url: result.url, providerReport: result.report, refinedPrompt: result.refined });
-      saveHistory({ name: activeProject?.name, prompt: activeProject?.prompt, status: 'completado', url: result.url, provider: 'MiniMax H3' });
-      activeJobId = null; generateBtn.disabled = false; cancelBtn.disabled = true; return;
-    }
     const response = await fetch('/api/video/generate', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ prompt, negative: negativeInput.value.trim(), aspect: aspectInput.value, duration: Number(durationInput.value), resolution: resolutionInput.value, audioText: audioTextInput?.value.trim() || '', audioLanguage: audioLanguageInput?.value || 'en' })
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        provider,
+        videoProvider: provider,
+        prompt,
+        negative: negativeInput.value.trim(),
+        aspect: aspectInput.value,
+        duration: Number(durationInput.value),
+        resolution: resolutionInput.value,
+        audioText: audioTextInput?.value.trim() || '',
+        audioLanguage: audioLanguageInput?.value || 'en'
+      })
     });
     const data = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(data.error || `El servidor rechazó la generación (HTTP ${response.status}).`);
     activeJobId = data.request_id || data.requestId || data.job_id;
     if (!activeJobId) throw new Error('El motor no devolvió un identificador de trabajo.');
-    saveProject({ status: 'procesando', requestId: activeJobId, sequenceId: data.job_id || '' });
+    saveProject({ status: 'procesando', requestId: activeJobId });
     poll(activeJobId, Date.now());
   } catch (error) {
-    h3Submission = null;
     generateBtn.disabled = false; cancelBtn.disabled = true; loadingState.classList.add('hidden'); statusText.textContent = 'Error'; showError(error.message);
   }
 }
