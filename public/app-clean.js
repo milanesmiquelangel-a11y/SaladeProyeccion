@@ -59,6 +59,10 @@ function clearError() { errorBox.textContent = ''; errorBox.classList.add('hidde
 function setLoading(title, detail) { emptyState.classList.add('hidden'); loadingState.classList.remove('hidden'); loadingTitle.textContent = title; loadingDetail.textContent = detail; statusText.textContent = 'Procesando'; }
 function updateCounter() { charCount.textContent = `${promptInput.value.length} / 4000`; }
 
+function selectedProvider() {
+  return videoProviderInput?.value || 'wan';
+}
+
 function updateProviderUi() {
   const provider = videoProviderInput?.value || 'wan';
   const info = PROVIDERS[provider] || PROVIDERS.wan;
