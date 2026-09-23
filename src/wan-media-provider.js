@@ -74,7 +74,7 @@ export async function generateWanCharacterImage({ prompt, aspect, outputDir }) {
         messages: [{
           role: 'user',
           content: [{
-            text: `Create a single cinematic first-frame image for this video scene. Preserve a clear, visible main character suitable for facial animation and dialogue. ${scene}`
+            text: `Create a single cinematic first-frame image for this video scene. Preserve one clearly visible main character suitable for facial animation and dialogue. Use a medium shot or medium close-up, keep the face unobstructed and well lit, and keep the mouth clearly visible. ${scene}`
           }]
         }]
       },
