@@ -20,6 +20,12 @@ services:
         sync: false
       - key: WAN_MODEL
         value: wan2.7-t2v-2026-04-25
+      - key: WAN_I2V_MODEL
+        value: wan2.7-i2v-2026-04-25
+      - key: WAN_IMAGE_MODEL
+        value: wan2.7-image
+      - key: PUBLIC_BASE_URL
+        value: https://sala-de-proyeccion.onrender.com
       - key: KLING_API_KEY
         sync: false
       - key: KLING_API_BASE_URL
