@@ -16,6 +16,7 @@ import { getAuthenticatedUserId } from './auth.js';
 import billingRouter from './billing-routes.js';
 import { checkDatabase } from './database.js';
 import { generateKlingVideo, downloadKlingVideo, klingConfigured, klingSupportedNativeLanguages } from './kling-video-provider.js';
+import { freeProvidersConfigured, generateFreeVideo } from './free-video-providers.js';
 
 const execFileAsync = promisify(execFile);
 const app = express();
@@ -55,13 +56,15 @@ app.use(express.static(publicDir));
 app.get('/api/health', async (_req, res) => {
   const database = await checkDatabase();
   const ready = klingConfigured();
-  res.status(ready ? 200 : 503).json({
+  const free = freeProvidersConfigured();
+  res.status(200).json({
     ok: ready,
     service: 'sala-de-proyeccion-api',
-    provider: 'MiniMax H3 Turbo + Kling VIDEO 3.0',
+    provider: 'Seedance 2.0 Fast + Wan 2.7 + Kling VIDEO 3.0',
     generationReady: true,
-    h3Available: true,
-    h3Space: 'MiniMaxAI/MiniMax-H3-Turbo-Lora',
+    freeProviders: free,
+    seedanceConfigured: free.seedance,
+    wanConfigured: free.wan,
     klingConfigured: ready,
     nativeAudio: true,
     nativeDialogue: true,
@@ -93,6 +96,67 @@ function clearBilling(id) {
 }
 
 app.post('/api/video/generate', async (req, res) => {
+  const requestedProvider = String(req.body?.videoProvider || 'wan').trim().toLowerCase();
+  const freeProvider = requestedProvider === 'seedance' || requestedProvider === 'wan';
+  const userId = String(req.get('x-sala-user-id') || '').trim() || await getAuthenticatedUserId(req);
+  if (!userId) return res.status(401).json({ error: 'Inicia sesión antes de generar un vídeo.' });
+
+  if (freeProvider) {
+    const prompt = String(req.body?.prompt || '').trim();
+    const aspect = ['16:9','9:16','1:1'].includes(req.body?.aspect) ? req.body.aspect : '16:9';
+    const duration = Math.round(Number(req.body?.duration) || 5);
+    const audioText = String(req.body?.audioText || '').trim();
+    const audioLanguage = String(req.body?.audioLanguage || 'en').trim() || 'en';
+    if (!prompt) return res.status(400).json({ error: 'prompt es obligatorio.' });
+    if (prompt.length > 4000) return res.status(400).json({ error: 'prompt no puede superar 4000 caracteres.' });
+    const free = freeProvidersConfigured();
+    if (!free[requestedProvider]) {
+      return res.status(503).json({ error: requestedProvider === 'seedance'
+        ? 'Seedance no está configurado todavía. Añade BYTEPLUS_LAS_API_KEY en Render.'
+        : 'Wan 2.7 no está configurado todavía. Añade DASHSCOPE_API_KEY y DASHSCOPE_WORKSPACE_ID en Render.' });
+    }
+    const id = randomUUID();
+    const job = {
+      id, status: 'QUEUED', createdAt: Date.now(), cancelled: false,
+      provider: requestedProvider === 'seedance' ? 'Seedance 2.0 Fast' : 'Wan 2.7',
+      providerState: 'QUEUED', providerRequestId: null,
+      detail: 'Preparando generación gratuita…', outputUrl: '', nativeAudio: true
+    };
+    jobs.set(id, job);
+    res.status(202).json({ request_id: id, provider: job.provider, nativeAudio: true, audioLanguage });
+
+    (async () => {
+      const workDir = await fs.mkdtemp(path.join(os.tmpdir(), `sala-${requestedProvider}-`));
+      try {
+        job.status = 'PROCESSING';
+        job.detail = `Generando con ${job.provider}…`;
+        const promptWithDialogue = audioText
+          ? `${prompt}\n\nIMPORTANT: The visible character speaks this exact dialogue in ${audioLanguage}: "${audioText}". Generate the speech as part of the audiovisual result and synchronize the character's mouth and facial motion with the spoken words. No off-screen narrator.`
+          : prompt;
+        const result = await generateFreeVideo({
+          provider: requestedProvider,
+          prompt: promptWithDialogue,
+          duration: requestedProvider === 'seedance' ? Math.max(4, Math.min(15, duration)) : Math.max(2, Math.min(15, duration)),
+          aspect,
+          outputDir: workDir
+        });
+        if (job.cancelled) throw Object.assign(new Error('Generación cancelada.'), { code: 'CANCELLED' });
+        await fs.mkdir(generatedDir, { recursive: true });
+        const output = path.join(generatedDir, `${id}.mp4`);
+        await execFileAsync(ffmpegPath, ['-y','-i',result.filePath,'-c:v','libx264','-preset','medium','-crf','18','-pix_fmt','yuv420p', ...(result.nativeAudio ? ['-c:a','aac','-b:a','192k'] : ['-an']), '-movflags','+faststart',output], { maxBuffer: 1024 * 1024 });
+        job.status = 'COMPLETED';
+        job.outputUrl = `/generated/${id}.mp4`;
+        job.detail = `${result.provider} listo con audio audiovisual.`;
+      } catch (error) {
+        job.status = error?.code === 'CANCELLED' ? 'CANCELLED' : 'ERROR';
+        job.detail = error?.message || 'No se pudo completar la generación.';
+      } finally {
+        await fs.rm(workDir, { recursive: true, force: true });
+      }
+    })();
+    return;
+  }
+
   const userId = String(req.get('x-sala-user-id') || '').trim() || await getAuthenticatedUserId(req);
   if (!userId) return res.status(401).json({ error: 'Inicia sesión antes de generar un vídeo.' });
   if (!klingConfigured()) return res.status(503).json({ error: 'Kling VIDEO 3.0 no está configurado. Añade KLING_API_KEY en Render.' });
