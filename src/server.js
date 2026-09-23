@@ -61,12 +61,13 @@ mountAudioApi(app);
 app.get('/api/health', async (_req, res) => {
   const database = await checkDatabase();
   const ready = klingConfigured();
+  const generationReady = Boolean(freeProvidersConfigured().wan || freeProvidersConfigured().seedance || ready);
   const free = freeProvidersConfigured();
   res.status(200).json({
     ok: ready,
     service: 'sala-de-proyeccion-api',
     provider: 'Seedance 2.0 Fast + Wan 2.7 + Kling VIDEO 3.0',
-    generationReady: true,
+    generationReady,
     freeProviders: free,
     seedanceConfigured: free.seedance,
     wanConfigured: free.wan,
