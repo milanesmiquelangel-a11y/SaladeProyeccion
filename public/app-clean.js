@@ -153,7 +153,7 @@ function loadProject(id) {
   durationInput.value = String(p.duration || 5);
   resolutionInput.value = p.resolution || 'standard';
   if (frameRateInput) frameRateInput.value = String(p.frameRate || 24);
-  if (videoProviderInput) videoProviderInput.value = p.videoProvider || 'h3';
+  if (videoProviderInput) videoProviderInput.value = p.videoProvider || 'wan';
   updateProviderUi();
   updateCounter();
   if (p.url) showVideo(p.url); else resetResult();
@@ -192,8 +192,8 @@ async function health() {
     const response = await fetch('/api/health');
     const data = await response.json();
     const ready = response.ok && data.generationReady;
-    apiBadge.textContent = ready ? 'H3 + Kling disponibles' : 'H3 disponible · Kling pendiente';
-    providerSetting.textContent = `${data.provider || 'H3 + Kling'} · H3 ZeroGPU disponible${ready ? ' · Kling lista' : ''}`;
+    apiBadge.textContent = ready ? 'Wan + Seedance + Kling' : 'Free engines pending';
+    providerSetting.textContent = `${data.provider || 'Wan 2.7 + Seedance 2.0 Fast + Kling'} · Free: ${data.wanConfigured ? 'Wan' : '—'} ${data.seedanceConfigured ? 'Seedance' : '—'}${ready ? ' · Kling' : ''}`;
     providerDot.classList.toggle('ready', ready);
   } catch {
     apiBadge.textContent = 'Servidor desconectado';
@@ -229,8 +229,7 @@ async function poll(jobId, startedAt) {
 }
 
 async function cancelActive() {
-  if (h3Submission) { try { h3Submission.cancel(); } catch (_) {} h3Submission = null; }
-  if (!activeJobId) return;
+    if (!activeJobId) return;
   clearTimeout(pollTimer);
   try { await fetch(`/api/video/cancel/${encodeURIComponent(activeJobId)}`, { method: 'POST' }); } catch (_) {}
   activeJobId = null; cancelBtn.disabled = true; generateBtn.disabled = false;
