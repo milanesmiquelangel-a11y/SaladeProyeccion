@@ -1,6 +1,5 @@
 import path from 'node:path';
 import { generateSpeechAudio, normalizeAudioLanguage } from './audio-tts.js';
-import { generateNaturalAudio } from './natural-audio-service.js';
 import { attachGeneratedAudio } from './patch-audio-mux.js';
 import fs from 'node:fs/promises';
 
@@ -19,19 +18,6 @@ export function mountAudioApi(app) {
     } catch (error) {
       console.error('Audio generation error:', error);
       return res.status(502).json({ error: error.message || 'No se pudo generar el audio.' });
-    }
-  });
-
-  app.post('/api/audio/natural', async (req, res) => {
-    try {
-      const prompt = String(req.body?.prompt || '').trim();
-      const durationSeconds = Math.min(60, Math.max(1, Number(req.body?.durationSeconds) || 5));
-      if (!prompt) return res.status(400).json({ error: 'Falta el prompt de la escena para crear el audio natural.' });
-      const result = await generateNaturalAudio({ prompt, duration: durationSeconds, outputDir: audioDir });
-      return res.json({ ok: true, url: `/generated-audio/${path.basename(result.filePath)}`, provider: result.provider, space: result.space });
-    } catch (error) {
-      console.error('Natural audio generation error:', error);
-      return res.status(502).json({ error: error.message || 'No se pudo generar el audio natural.' });
     }
   });
 
