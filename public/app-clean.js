@@ -64,7 +64,7 @@ function updateProviderUi() {
   const info = PROVIDERS[provider] || PROVIDERS.wan;
   if (providerHint) {
     const hints = {
-      wan: 'Wan 2.7 uses Alibaba Model Studio free quota when available and supports native audiovisual generation.',
+      wan: 'Wan 2.7 uses Alibaba Model Studio free quota when available. With dialogue, it creates a character frame and uses the generated voice as driving audio for native lip-sync.',
       seedance: 'Seedance 2.0 Fast uses the configured BytePlus API/promo quota; availability and cost depend on the account.',
       kling: 'Kling VIDEO 3.0 uses the configured paid API and may consume application credits.'
     };
