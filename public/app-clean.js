@@ -59,6 +59,22 @@ function clearError() { errorBox.textContent = ''; errorBox.classList.add('hidde
 function setLoading(title, detail) { emptyState.classList.add('hidden'); loadingState.classList.remove('hidden'); loadingTitle.textContent = title; loadingDetail.textContent = detail; statusText.textContent = 'Procesando'; }
 function updateCounter() { charCount.textContent = `${promptInput.value.length} / 4000`; }
 
+function updateProviderUi() {
+  const provider = videoProviderInput?.value || 'wan';
+  const info = PROVIDERS[provider] || PROVIDERS.wan;
+  if (providerHint) {
+    const hints = {
+      wan: 'Wan 2.7 uses Alibaba Model Studio free quota when available and supports native audiovisual generation.',
+      seedance: 'Seedance 2.0 Fast uses the configured BytePlus API/promo quota; availability and cost depend on the account.',
+      kling: 'Kling VIDEO 3.0 uses the configured paid API and may consume application credits.'
+    };
+    providerHint.textContent = hints[provider] || info.label;
+  }
+  if (h3FramesPanel) h3FramesPanel.classList.add('hidden');
+  if (audioTextInput) audioTextInput.disabled = !info.nativeAudio;
+  if (audioLanguageInput) audioLanguageInput.disabled = !info.nativeAudio;
+}
+
 async function copyPrompt() {
   const text = promptInput?.value.trim() || '';
   if (!text) {
