@@ -65,7 +65,7 @@ app.get('/api/health', async (_req, res) => {
   const generationReady = Boolean(freeStatus.wan || freeStatus.seedance || ready);
   const free = freeProvidersConfigured();
   res.status(200).json({
-    ok: ready,
+    ok: generationReady,
     service: 'sala-de-proyeccion-api',
     provider: 'Seedance 2.0 Fast + Wan 2.7 + Kling VIDEO 3.0',
     generationReady,
