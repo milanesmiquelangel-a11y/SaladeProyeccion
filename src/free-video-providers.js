@@ -43,7 +43,7 @@ async function seedanceCreate({ prompt, duration, aspect }) {
     execution_expires_after: 3600
   };
   if (duration) body.duration = Math.max(4, Math.min(15, Math.round(duration)));
-  if (ratio) body.aspect_ratio = ratio;
+  if (ratio) body.ratio = ratio;
   const response = await fetch(`${BYTEPLUS_BASE}/contents/generations/tasks`, {
     method: 'POST', headers: jsonHeaders(BYTEPLUS_KEY), body: JSON.stringify(body)
   });
