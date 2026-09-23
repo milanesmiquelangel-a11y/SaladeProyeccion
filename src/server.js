@@ -17,6 +17,9 @@ import billingRouter from './billing-routes.js';
 import { checkDatabase } from './database.js';
 import { generateKlingVideo, downloadKlingVideo, klingConfigured, klingSupportedNativeLanguages } from './kling-video-provider.js';
 import { freeProvidersConfigured, generateFreeVideo } from './free-video-providers.js';
+import { generateSpeechAudio } from './audio-tts.js';
+import { mountAudioApi } from './audio-api.js';
+import { generateWanCharacterImage, generateWanLipSyncVideo, wanMediaConfigured, publicAudioUrl } from './wan-media-provider.js';
 
 const execFileAsync = promisify(execFile);
 const app = express();
@@ -24,6 +27,7 @@ const PORT = Number(process.env.PORT || 3000);
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const publicDir = path.join(__dirname, '..', 'public');
 const generatedDir = path.join(publicDir, 'generated');
+const generatedAudioDir = path.join(publicDir, 'generated-audio');
 const jobs = new Map();
 const billing = new Map();
 const TIMEOUT = 20 * 60 * 1000;
@@ -52,6 +56,7 @@ app.get('/sitemap.xml', (_req, res) => {
 });
 
 app.use(express.static(publicDir));
+mountAudioApi(app);
 
 app.get('/api/health', async (_req, res) => {
   const database = await checkDatabase();
@@ -65,6 +70,7 @@ app.get('/api/health', async (_req, res) => {
     freeProviders: free,
     seedanceConfigured: free.seedance,
     wanConfigured: free.wan,
+    wanLipSyncConfigured: wanMediaConfigured(),
     klingConfigured: ready,
     nativeAudio: true,
     nativeDialogue: true,
@@ -130,16 +136,32 @@ app.post('/api/video/generate', async (req, res) => {
       try {
         job.status = 'PROCESSING';
         job.detail = `Generando con ${job.provider}…`;
-        const promptWithDialogue = audioText
-          ? `${prompt}\n\nIMPORTANT: The visible character speaks this exact dialogue in ${audioLanguage}: "${audioText}". Generate the speech as part of the audiovisual result and synchronize the character's mouth and facial motion with the spoken words. No off-screen narrator.`
-          : prompt;
-        const result = await generateFreeVideo({
-          provider: requestedProvider,
-          prompt: promptWithDialogue,
-          duration: requestedProvider === 'seedance' ? Math.max(4, Math.min(15, duration)) : Math.max(2, Math.min(15, duration)),
-          aspect,
-          outputDir: workDir
-        });
+        let result;
+        if (requestedProvider === 'wan' && audioText) {
+          job.detail = 'Generando voz y personaje de referencia con Wan 2.7…';
+          const audioFile = await generateSpeechAudio({ text: audioText, language: audioLanguage, outputDir: generatedAudioDir });
+          const audioUrl = publicAudioUrl(audioFile);
+          const imageResult = await generateWanCharacterImage({ prompt, aspect, outputDir: workDir });
+          job.detail = 'Animando el personaje con Wan 2.7 y sincronizando labios…';
+          result = await generateWanLipSyncVideo({
+            prompt: prompt + '\n\nThe visible character speaks the supplied driving audio naturally. Keep the character\'s face visible and animate the mouth and facial expressions in sync with the spoken words. Do not add an off-screen narrator.',
+            imagePath: imageResult.filePath,
+            audioUrl,
+            duration: Math.max(2, Math.min(15, duration)),
+            outputDir: workDir
+          });
+        } else {
+          const promptWithDialogue = audioText
+            ? prompt + '\n\nIMPORTANT: The visible character speaks this exact dialogue in ' + audioLanguage + ': "' + audioText + '". Generate the speech as part of the audiovisual result and synchronize the character\'s mouth and facial motion with the spoken words. No off-screen narrator.'
+            : prompt;
+          result = await generateFreeVideo({
+            provider: requestedProvider,
+            prompt: promptWithDialogue,
+            duration: requestedProvider === 'seedance' ? Math.max(4, Math.min(15, duration)) : Math.max(2, Math.min(15, duration)),
+            aspect,
+            outputDir: workDir
+          });
+        }
         if (job.cancelled) throw Object.assign(new Error('Generación cancelada.'), { code: 'CANCELLED' });
         await fs.mkdir(generatedDir, { recursive: true });
         const output = path.join(generatedDir, `${id}.mp4`);
