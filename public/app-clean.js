@@ -44,7 +44,7 @@ let pollTimer = null;
 let activeJobId = null;
 let activeProject = null;
 const PROVIDERS = {
-  seedance: { label: 'Seedance 2.0 Fast — Free quota', nativeAudio: true },
+  seedance: { label: 'Seedance 2.0 Fast — API / promo quota', nativeAudio: true },
   wan: { label: 'Wan 2.7 — Free quota', nativeAudio: true },
   kling: { label: 'Kling VIDEO 3.0 — API', nativeAudio: true }
 };
@@ -206,7 +206,7 @@ async function poll(jobId, startedAt) {
   if (!activeJobId) return;
   if (Date.now() - startedAt > TIMEOUT) {
     await cancelActive();
-    showError('La generación superó 20 minutos y fue cancelada. El crédito fue devuelto.');
+    showError('La generación superó 20 minutos y fue cancelada.');
     generateBtn.disabled = false; cancelBtn.disabled = true; return;
   }
   try {
