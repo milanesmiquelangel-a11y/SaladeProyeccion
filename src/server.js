@@ -61,7 +61,8 @@ mountAudioApi(app);
 app.get('/api/health', async (_req, res) => {
   const database = await checkDatabase();
   const ready = klingConfigured();
-  const generationReady = Boolean(freeProvidersConfigured().wan || freeProvidersConfigured().seedance || ready);
+  const freeStatus = freeProvidersConfigured();
+  const generationReady = Boolean(freeStatus.wan || freeStatus.seedance || ready);
   const free = freeProvidersConfigured();
   res.status(200).json({
     ok: ready,
@@ -166,7 +167,12 @@ app.post('/api/video/generate', async (req, res) => {
         if (job.cancelled) throw Object.assign(new Error('Generación cancelada.'), { code: 'CANCELLED' });
         await fs.mkdir(generatedDir, { recursive: true });
         const output = path.join(generatedDir, `${id}.mp4`);
+        if (!ffmpegPath) throw new Error('FFmpeg no está disponible para finalizar el vídeo generado.');
         await execFileAsync(ffmpegPath, ['-y','-i',result.filePath,'-c:v','libx264','-preset','medium','-crf','18','-pix_fmt','yuv420p', ...(result.nativeAudio ? ['-c:a','aac','-b:a','192k'] : ['-an']), '-movflags','+faststart',output], { maxBuffer: 1024 * 1024 });
+        if (result.nativeAudio) {
+          const probe = await execFileAsync(ffmpegPath, ['-v','error','-i',output,'-select_streams','a:0','-show_entries','stream=codec_type','-of','csv=p=0']);
+          if (!probe.stdout.trim()) throw new Error('El vídeo terminó sin pista de audio nativa. Se detiene la generación para no presentar un resultado sin sincronización audiovisual.');
+        }
         job.status = 'COMPLETED';
         job.outputUrl = `/generated/${id}.mp4`;
         job.detail = `${result.provider} listo con audio audiovisual.`;
