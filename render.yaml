@@ -6,6 +6,20 @@ services:
     startCommand: npm start
     healthCheckPath: /api/health
     envVars:
+      - key: BYTEPLUS_LAS_API_KEY
+        sync: false
+      - key: BYTEPLUS_LAS_BASE_URL
+        value: https://operator.las.ap-southeast-1.bytepluses.com/api/v1
+      - key: SEEDANCE_MODEL
+        value: dreamina-seedance-2-0-fast-260128
+      - key: DASHSCOPE_API_KEY
+        sync: false
+      - key: DASHSCOPE_WORKSPACE_ID
+        sync: false
+      - key: DASHSCOPE_BASE_URL
+        sync: false
+      - key: WAN_MODEL
+        value: wan2.7-t2v-2026-04-25
       - key: KLING_API_KEY
         sync: false
       - key: KLING_API_BASE_URL
