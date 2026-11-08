@@ -7,7 +7,7 @@ const KASPI_URL = 'https://pay.kaspi.kz/pay/8zv3mms1';
 const WINDOW_MS = 15 * 60 * 1000;
 const MAX_REQUESTS = 5;
 const attempts = new Map();
-function clean(value, max) { return String(value ?? '').trim().replace(/[\\u0000-\\u001f\\u007f]/g, '').slice(0, max); }
+function clean(value, max) { return String(value ?? '').trim().replace(/[\u0000-\u001f\u007f]/g, '').slice(0, max); }
 function rateLimited(key) {
   const now = Date.now();
   const prior = (attempts.get(key) || []).filter(t => now - t < WINDOW_MS);
