@@ -100,7 +100,7 @@ export async function ensureSchema() {
         );
         CREATE INDEX IF NOT EXISTS sala_transactions_user_created_idx ON sala_transactions(user_id, created_at DESC);
         CREATE INDEX IF NOT EXISTS sala_transactions_reserved_idx ON sala_transactions(user_id, type, status, created_at);
-        CREATE TABLE IF NOT EXISTS sala_payments (
+        CREATE TABLE IF NOT EXISTS sala_orders (\n          id UUID PRIMARY KEY, order_number TEXT NOT NULL UNIQUE, access_token_hash TEXT NOT NULL,\n          customer_name TEXT NOT NULL, customer_contact TEXT NOT NULL, service TEXT NOT NULL, brief TEXT NOT NULL,\n          language TEXT NOT NULL DEFAULT 'ru',\n          status TEXT NOT NULL DEFAULT 'submitted' CHECK (status IN ('submitted','quoted','awaiting_payment','paid','in_production','ready','delivered','cancelled')),\n          quote_amount NUMERIC(12,2), currency TEXT NOT NULL DEFAULT 'KZT', payment_confirmed_at TIMESTAMPTZ,\n          payment_confirmed_by TEXT, delivery_note TEXT, admin_note TEXT, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()\n        );\n        CREATE INDEX IF NOT EXISTS sala_orders_status_created_idx ON sala_orders(status, created_at DESC);\n        CREATE TABLE IF NOT EXISTS sala_payments (
           id TEXT PRIMARY KEY,
           user_id TEXT NOT NULL REFERENCES sala_accounts(user_id),
           provider TEXT NOT NULL,
