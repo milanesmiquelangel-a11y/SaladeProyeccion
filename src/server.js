@@ -14,6 +14,7 @@ import ffmpegPath from 'ffmpeg-static';
 import { finalizeGeneration, refundGeneration, reserveGeneration } from './billing-ledger.js';
 import { getAuthenticatedUserId } from './auth.js';
 import billingRouter from './billing-routes.js';
+import orderRouter from './order-routes.js';
 import { checkDatabase } from './database.js';
 import { generateKlingVideo, downloadKlingVideo, klingConfigured, klingSupportedNativeLanguages } from './kling-video-provider.js';
 import { freeProvidersConfigured, generateFreeVideo } from './free-video-providers.js';
@@ -35,6 +36,7 @@ const TIMEOUT = 20 * 60 * 1000;
 app.use(cors());
 app.use(express.json({ limit: '1mb' }));
 app.use('/api/billing', billingRouter);
+app.use('/api/orders', orderRouter);
 
 app.get('/', async (_req, res) => {
   try {
