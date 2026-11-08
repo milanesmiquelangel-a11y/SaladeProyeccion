@@ -1,7 +1,17 @@
 import pg from 'pg';
 
 const { Pool } = pg;
-const connectionString = process.env.DATABASE_URL;
+const rawConnectionString = process.env.DATABASE_URL;
+const connectionString = (() => {
+  if (!rawConnectionString) return null;
+  try {
+    const parsed = new URL(rawConnectionString);
+    // pg-connection-string can override the explicit SSL options when sslmode is
+    // embedded in the URI. Keep TLS settings in the Pool configuration instead.
+    parsed.searchParams.delete('sslmode');
+    return parsed.toString();
+  } catch { return rawConnectionString; }
+})();
 
 function connectionSslMode(url) {
   if (!url) return null;
@@ -16,8 +26,8 @@ function connectionSslMode(url) {
   return null;
 }
 
-const sslMode = connectionSslMode(connectionString);
-const pool = connectionString ? new Pool({ connectionString, max: 5, idleTimeoutMillis: 30000, connectionTimeoutMillis: 5000, ssl: sslMode === 'require' ? { rejectUnauthorized: false } : undefined }) : null;
+const sslMode = connectionSslMode(rawConnectionString);
+const pool = connectionString ? new Pool({ connectionString, max: 5, idleTimeoutMillis: 30000, connectionTimeoutMillis: 5000, ssl: sslMode === 'disable' ? undefined : { rejectUnauthorized: false } }) : null;
 let schemaPromise = null;
 
 export function databaseConfigured() { return Boolean(pool); }
