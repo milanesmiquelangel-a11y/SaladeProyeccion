@@ -32,6 +32,17 @@ router.post('/', async (req, res) => {
     return res.status(201).json({ order: result.rows[0], accessToken, message: 'Solicitud recibida. Guarda el número y el código privado de seguimiento.' });
   } catch (error) { console.error('Order submission error:', error); return res.status(503).json({ error: 'No se pudo guardar la solicitud. Inténtalo más tarde.' }); }
 });
+router.post('/:orderNumber/accept', async (req, res) => {
+  try {
+    const number = clean(req.params.orderNumber, 40).toUpperCase();
+    const token = clean(req.get('x-order-token'), 100);
+    if (!token) return res.status(401).json({ error: 'Falta el código privado de seguimiento.' });
+    const hash = crypto.createHash('sha256').update(token).digest('hex');
+    const result = await dbQuery("UPDATE sala_orders SET status='awaiting_payment', updated_at=NOW() WHERE order_number=$1 AND access_token_hash=$2 AND status='quoted' AND quote_amount > 0 RETURNING order_number AS \"orderNumber\", status, quote_amount AS \"quoteAmount\", currency", [number, hash]);
+    if (!result.rows.length) return res.status(409).json({ error: 'No hay un presupuesto pendiente de aceptación para este pedido.' });
+    return res.json({ order: result.rows[0], paymentUrl: KASPI_URL });
+  } catch (error) { console.error('Order acceptance error:', error); return res.status(503).json({ error: 'No se pudo aceptar el presupuesto.' }); }
+});
 router.get('/:orderNumber', async (req, res) => {
   try {
     const number = clean(req.params.orderNumber, 40).toUpperCase(); const token = clean(req.get('x-order-token'), 100);
