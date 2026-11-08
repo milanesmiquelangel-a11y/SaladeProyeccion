@@ -118,4 +118,35 @@ router.get('/api/admin/transactions', requireAdmin, async (_req, res) => {
   } catch (error) { return jsonError(res, error); }
 });
 
+
+router.get('/api/admin/orders', requireAdmin, async (_req, res) => {
+  try {
+    const result = await dbQuery('SELECT id, order_number AS "orderNumber", customer_name AS "customerName", customer_contact AS "customerContact", service, brief, language, status, quote_amount AS "quoteAmount", currency, payment_confirmed_at AS "paymentConfirmedAt", delivery_note AS "deliveryNote", admin_note AS "adminNote", created_at AS "createdAt", updated_at AS "updatedAt" FROM sala_orders ORDER BY created_at DESC LIMIT 200');
+    return res.json({ orders: result.rows });
+  } catch (error) { return jsonError(res, error); }
+});
+
+router.patch('/api/admin/orders/:id', requireAdmin, async (req, res) => {
+  try {
+    const id = String(req.params.id || '');
+    const action = String(req.body?.action || '');
+    let result;
+    if (action === 'quote') {
+      const amount = Number(req.body?.amount);
+      if (!Number.isFinite(amount) || amount <= 0 || amount > 100000000) return res.status(400).json({ error: 'Importe no válido.' });
+      result = await dbQuery("UPDATE sala_orders SET quote_amount=$2, status='quoted', updated_at=NOW() WHERE id=$1 AND status IN ('submitted','quoted') RETURNING order_number AS \"orderNumber\", status, quote_amount AS \"quoteAmount\"", [id, amount]);
+    } else if (action === 'request_payment') {
+      return res.status(400).json({ error: 'El cliente debe aceptar el presupuesto desde su enlace privado de seguimiento.' });
+    } else if (action === 'confirm_payment') {
+      result = await dbQuery("UPDATE sala_orders SET status='paid', payment_confirmed_at=NOW(), payment_confirmed_by='admin', updated_at=NOW() WHERE id=$1 AND status='awaiting_payment' RETURNING order_number AS \"orderNumber\", status, payment_confirmed_at AS \"paymentConfirmedAt\"", [id]);
+    } else if (['in_production','ready','delivered','cancelled'].includes(action)) {
+      const note = String(req.body?.note || '').trim().slice(0, 1500);
+      const allowed = action === 'in_production' ? "status='paid'" : action === 'ready' ? "status='in_production'" : action === 'delivered' ? "status='ready'" : "status IN ('submitted','quoted','awaiting_payment','paid','in_production')";
+      result = await dbQuery("UPDATE sala_orders SET status=$2, delivery_note=CASE WHEN $2 IN ('ready','delivered') AND $3 <> '' THEN $3 ELSE delivery_note END, updated_at=NOW() WHERE id=$1 AND " + allowed + " RETURNING order_number AS \"orderNumber\", status", [id, action, note]);
+    } else return res.status(400).json({ error: 'Acción no válida.' });
+    if (!result.rows.length) return res.status(409).json({ error: 'El pedido no existe o no permite ese cambio de estado.' });
+    return res.json({ ok: true, order: result.rows[0] });
+  } catch (error) { return jsonError(res, error); }
+});
+
 export default router;
