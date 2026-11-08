@@ -136,7 +136,7 @@ router.patch('/api/admin/orders/:id', requireAdmin, async (req, res) => {
       if (!Number.isFinite(amount) || amount <= 0 || amount > 100000000) return res.status(400).json({ error: 'Importe no válido.' });
       result = await dbQuery("UPDATE sala_orders SET quote_amount=$2, status='quoted', updated_at=NOW() WHERE id=$1 AND status IN ('submitted','quoted') RETURNING order_number AS \"orderNumber\", status, quote_amount AS \"quoteAmount\"", [id, amount]);
     } else if (action === 'request_payment') {
-      result = await dbQuery("UPDATE sala_orders SET status='awaiting_payment', updated_at=NOW() WHERE id=$1 AND status='quoted' AND quote_amount > 0 RETURNING order_number AS \"orderNumber\", status, quote_amount AS \"quoteAmount\"", [id]);
+      return res.status(400).json({ error: 'El cliente debe aceptar el presupuesto desde su enlace privado de seguimiento.' });
     } else if (action === 'confirm_payment') {
       result = await dbQuery("UPDATE sala_orders SET status='paid', payment_confirmed_at=NOW(), payment_confirmed_by='admin', updated_at=NOW() WHERE id=$1 AND status='awaiting_payment' RETURNING order_number AS \"orderNumber\", status, payment_confirmed_at AS \"paymentConfirmedAt\"", [id]);
     } else if (['in_production','ready','delivered','cancelled'].includes(action)) {
